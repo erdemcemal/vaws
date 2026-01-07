@@ -1,0 +1,67 @@
+# GoReleaser configuration for vaws
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: vaws
+    main: ./cmd/vaws
+    binary: vaws
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X vaws/internal/app.Version={{.Version}}
+      - -X vaws/internal/app.Commit={{.Commit}}
+      - -X vaws/internal/app.BuildDate={{.Date}}
+
+archives:
+  - id: vaws
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE*
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+brews:
+  - name: vaws
+    # Replace with your GitHub username/org
+    repository:
+      owner: erdemcemal
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+
+    directory: Formula
+    homepage: "https://github.com/erdemcemal/vaws"
+    description: "TUI for AWS CloudFormation & ECS exploration with port forwarding"
+    license: "MIT"
+
+    dependencies:
+      - name: awscli
+        type: optional
+
+    install: |
+      bin.install "vaws"
+
+    test: |
+      system "#{bin}/vaws", "--version"
