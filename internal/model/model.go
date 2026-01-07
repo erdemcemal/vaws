@@ -444,3 +444,37 @@ type ContainerLogConfig struct {
 	LogRegion       string // May differ from current region
 	LogStreamName   string // Computed: prefix/container/task-id
 }
+
+// QueueType represents the type of SQS queue.
+type QueueType string
+
+const (
+	QueueTypeStandard QueueType = "Standard"
+	QueueTypeFIFO     QueueType = "FIFO"
+)
+
+// Queue represents an SQS queue.
+type Queue struct {
+	Name                    string
+	URL                     string
+	ARN                     string
+	Type                    QueueType
+	ApproximateMessageCount int
+	ApproximateInFlight     int // Messages currently being processed
+	VisibilityTimeout       int // In seconds
+	MessageRetentionPeriod  int // In seconds
+	DelaySeconds            int
+	CreatedAt               time.Time
+	// DLQ info
+	HasDLQ          bool
+	DLQArn          string
+	DLQURL          string
+	DLQName         string
+	DLQMessageCount int
+	MaxReceiveCount int // Number of receives before message goes to DLQ
+}
+
+// HasDLQMessages returns true if the queue has messages in its DLQ.
+func (q *Queue) HasDLQMessages() bool {
+	return q.HasDLQ && q.DLQMessageCount > 0
+}

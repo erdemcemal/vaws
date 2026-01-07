@@ -74,6 +74,14 @@ func (d *Details) View() string {
 			break
 		}
 
+		// Skip rows with empty label and value (spacers render as blank lines)
+		if row.Label == "" && row.Value == "" {
+			if i < len(d.rows)-1 && i < maxRows-1 {
+				b.WriteString("\n")
+			}
+			continue
+		}
+
 		label := s.DetailLabel.Render(row.Label + ":")
 		value := row.Value
 
@@ -83,7 +91,8 @@ func (d *Details) View() string {
 			value = s.DetailValue.Render(value)
 		}
 
-		maxValueWidth := d.width - 26
+		// Use more of the available width for values
+		maxValueWidth := d.width - 18
 		if lipgloss.Width(value) > maxValueWidth && maxValueWidth > 0 {
 			value = truncate(value, maxValueWidth)
 		}

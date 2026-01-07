@@ -12,8 +12,9 @@ import (
 type ResourceType string
 
 const (
+	ResourceMain           ResourceType = "Resources"
 	ResourceStacks         ResourceType = "Stacks"
-	ResourceStackResources ResourceType = "Resources"
+	ResourceStackResources ResourceType = "Stack Resources"
 	ResourceClusters       ResourceType = "Clusters"
 	ResourceServices       ResourceType = "Services"
 	ResourceTasks          ResourceType = "Tasks"
@@ -24,6 +25,7 @@ const (
 	ResourceRDS            ResourceType = "RDS"
 	ResourceAPIGateway     ResourceType = "API GW"
 	ResourceAPIStages      ResourceType = "Stages"
+	ResourceSQS            ResourceType = "SQS"
 )
 
 // RegionShortcut represents a quick region switch shortcut
@@ -479,6 +481,8 @@ func (m *MenuBarWithCrumbs) View() string {
 // GetResourceIcon returns an icon for the resource type
 func GetResourceIcon(resource ResourceType) string {
 	switch resource {
+	case ResourceMain:
+		return "☁️"
 	case ResourceStacks:
 		return "📦"
 	case ResourceStackResources:
@@ -503,6 +507,8 @@ func GetResourceIcon(resource ResourceType) string {
 		return "🌐"
 	case ResourceAPIStages:
 		return "🚀"
+	case ResourceSQS:
+		return "📨"
 	default:
 		return "○"
 	}
@@ -511,6 +517,8 @@ func GetResourceIcon(resource ResourceType) string {
 // GetResourceColor returns the theme color for a resource type
 func GetResourceColor(resource ResourceType) lipgloss.AdaptiveColor {
 	switch resource {
+	case ResourceMain:
+		return theme.Primary
 	case ResourceStacks:
 		return theme.Warning
 	case ResourceStackResources:
@@ -535,6 +543,8 @@ func GetResourceColor(resource ResourceType) lipgloss.AdaptiveColor {
 		return theme.Primary
 	case ResourceAPIStages:
 		return theme.Success
+	case ResourceSQS:
+		return theme.Info
 	default:
 		return theme.TextMuted
 	}
@@ -558,6 +568,7 @@ var AvailableResources = []ResourceInfo{
 	{Type: ResourceTunnels, Icon: "🔗", Command: "tunnels", Aliases: []string{"tun", "pf"}, Description: "Port Forward Tunnels"},
 	{Type: ResourceLambda, Icon: "λ", Command: "lambda", Aliases: []string{"fn", "functions"}, Description: "Lambda Functions"},
 	{Type: ResourceAPIGateway, Icon: "🌐", Command: "apigateway", Aliases: []string{"apigw", "api"}, Description: "API Gateway"},
+	{Type: ResourceSQS, Icon: "📨", Command: "sqs", Aliases: []string{"queues"}, Description: "SQS Queues"},
 	{Type: ResourceEC2, Icon: "🖥️", Command: "ec2", Aliases: []string{"instances"}, Description: "EC2 Instances"},
 	{Type: ResourceS3, Icon: "🪣", Command: "s3", Aliases: []string{"buckets"}, Description: "S3 Buckets"},
 	{Type: ResourceRDS, Icon: "🗄️", Command: "rds", Aliases: []string{"databases", "db"}, Description: "RDS Databases"},
@@ -574,6 +585,11 @@ func FormatResourceCount(count int) string {
 // GetDefaultBindingsForResource returns the default key bindings for a resource type
 func GetDefaultBindingsForResource(resource ResourceType) []KeyBinding {
 	switch resource {
+	case ResourceMain:
+		return []KeyBinding{
+			{Key: "<enter>", Desc: "Select"},
+			{Key: "<q>", Desc: "Quit"},
+		}
 	case ResourceStacks:
 		return []KeyBinding{
 			{Key: "<enter>", Desc: "Resources"},
@@ -614,6 +630,12 @@ func GetDefaultBindingsForResource(resource ResourceType) []KeyBinding {
 			{Key: "<r>", Desc: "Refresh"},
 		}
 	case ResourceAPIStages:
+		return []KeyBinding{
+			{Key: "<d>", Desc: "Details"},
+			{Key: "<r>", Desc: "Refresh"},
+			{Key: "<esc>", Desc: "Back"},
+		}
+	case ResourceSQS:
 		return []KeyBinding{
 			{Key: "<d>", Desc: "Details"},
 			{Key: "<r>", Desc: "Refresh"},

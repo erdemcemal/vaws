@@ -10,6 +10,7 @@ type View int
 
 const (
 	ViewProfileSelect View = iota
+	ViewMain               // Main menu with resource type selection
 	ViewStacks
 	ViewStackResources // Shows resource types available in a stack
 	ViewClusters
@@ -24,6 +25,8 @@ const (
 	ViewJumpHostSelect    // Select jump host for private API Gateway tunnel
 	ViewContainerSelect   // Select container for port forwarding
 	ViewCloudWatchLogs    // CloudWatch logs streaming view
+	ViewSQS               // SQS queues view
+	ViewSQSDetails        // SQS queue details view
 )
 
 // State holds all application state.
@@ -111,6 +114,12 @@ type State struct {
 	CloudWatchServiceContext    *model.Service
 	CloudWatchTaskContext       *model.Task
 
+	// SQS Queues state
+	Queues        []model.Queue
+	QueuesLoading bool
+	QueuesError   error
+	SelectedQueue *model.Queue
+
 	// UI state
 	ShowLogs      bool
 	FilterText    string
@@ -122,7 +131,7 @@ type State struct {
 // New creates a new State with defaults.
 func New() *State {
 	return &State{
-		View:        ViewStacks,
+		View:        ViewMain,
 		ShowLogs:    true, // Show logs by default
 		AutoRefresh: true,
 	}
@@ -287,6 +296,19 @@ func (s *State) ClearCloudWatchLogs() {
 	s.CloudWatchSelectedContainer = 0
 	s.CloudWatchServiceContext = nil
 	s.CloudWatchTaskContext = nil
+}
+
+// ClearQueues clears SQS queue data.
+func (s *State) ClearQueues() {
+	s.Queues = nil
+	s.QueuesLoading = false
+	s.QueuesError = nil
+	s.SelectedQueue = nil
+}
+
+// SelectQueue sets the selected SQS queue.
+func (s *State) SelectQueue(queue *model.Queue) {
+	s.SelectedQueue = queue
 }
 
 // SelectStack sets the selected stack and changes view to services.
@@ -483,6 +505,21 @@ func (s *State) FilteredContainers() []model.Container {
 	for _, c := range s.PendingContainers {
 		if containsIgnoreCase(c.Name, s.FilterText) {
 			filtered = append(filtered, c)
+		}
+	}
+	return filtered
+}
+
+// FilteredQueues returns SQS queues filtered by the current filter text.
+func (s *State) FilteredQueues() []model.Queue {
+	if s.FilterText == "" {
+		return s.Queues
+	}
+
+	var filtered []model.Queue
+	for _, q := range s.Queues {
+		if containsIgnoreCase(q.Name, s.FilterText) {
+			filtered = append(filtered, q)
 		}
 	}
 	return filtered

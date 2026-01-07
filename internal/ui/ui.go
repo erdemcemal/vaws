@@ -4,9 +4,12 @@ package ui
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -139,6 +142,12 @@ type (
 		lastTimestamp int64
 		err           error
 	}
+
+	// queuesLoadedMsg is sent when SQS queues are loaded.
+	queuesLoadedMsg struct {
+		queues []model.Queue
+		err    error
+	}
 )
 
 // Layout constants for responsive design
@@ -181,6 +190,7 @@ type Model struct {
 	header             *components.Header
 	menuBar            *components.MenuBarWithCrumbs
 	footer             *components.Footer
+	mainMenuList       *components.List // Main menu with resource type selection
 	stacksList         *components.List
 	stackResourcesList *components.List
 	serviceList        *components.List
@@ -188,8 +198,10 @@ type Model struct {
 	apiGatewayList     *components.List
 	apiStagesList      *components.List
 	ec2List            *components.List // For jump host selection
-	containerList      *components.List // For container selection in port forwarding
-	details              *components.Details
+	containerList      *components.List     // For container selection in port forwarding
+	sqsTable           *components.SQSTable   // For SQS queues table view
+	sqsDetails         *components.SQSDetails // For SQS queue details view
+	details            *components.Details
 	logs                 *components.Logs
 	tunnelsPanel         *components.TunnelsPanel
 	cloudWatchLogsPanel  *components.CloudWatchLogsPanel
@@ -259,6 +271,7 @@ func New(client *aws.Client, logger *log.Logger, version string) *Model {
 		header:             components.NewHeader(),
 		menuBar:            menuBar,
 		footer:             components.NewFooter(),
+		mainMenuList:       components.NewList("AWS Resources"),
 		stacksList:         components.NewList("CloudFormation Stacks"),
 		stackResourcesList: components.NewList("Stack Resources"),
 		serviceList:        components.NewList("ECS Services"),
@@ -267,11 +280,13 @@ func New(client *aws.Client, logger *log.Logger, version string) *Model {
 		apiStagesList:      components.NewList("API Stages"),
 		ec2List:            components.NewList("Select Jump Host"),
 		containerList:      components.NewList("Select Container"),
-		details:             components.NewDetails(),
-		logs:                components.NewLogs(logger),
-		tunnelsPanel:        components.NewTunnelsPanel(),
+		sqsTable:           components.NewSQSTable(),
+		sqsDetails:         components.NewSQSDetails(),
+		details:            components.NewDetails(),
+		logs:               components.NewLogs(logger),
+		tunnelsPanel:       components.NewTunnelsPanel(),
 		cloudWatchLogsPanel: components.NewCloudWatchLogsPanel(),
-		commandPalette:      components.NewCommandPalette(),
+		commandPalette:     components.NewCommandPalette(),
 		actionBar:          components.NewActionBar(),
 		refreshIndicator:   components.NewRefreshIndicator(),
 		xrayTree:           components.NewXRayTree(),
@@ -318,6 +333,7 @@ func NewWithProfileSelection(profiles []string, region string, logger *log.Logge
 		header:             components.NewHeader(),
 		menuBar:            menuBar,
 		footer:             components.NewFooter(),
+		mainMenuList:       components.NewList("AWS Resources"),
 		stacksList:         components.NewList("CloudFormation Stacks"),
 		stackResourcesList: components.NewList("Stack Resources"),
 		serviceList:        components.NewList("ECS Services"),
@@ -326,12 +342,14 @@ func NewWithProfileSelection(profiles []string, region string, logger *log.Logge
 		apiStagesList:      components.NewList("API Stages"),
 		ec2List:            components.NewList("Select Jump Host"),
 		containerList:      components.NewList("Select Container"),
-		details:             components.NewDetails(),
-		logs:                components.NewLogs(logger),
-		tunnelsPanel:        components.NewTunnelsPanel(),
+		sqsTable:           components.NewSQSTable(),
+		sqsDetails:         components.NewSQSDetails(),
+		details:            components.NewDetails(),
+		logs:               components.NewLogs(logger),
+		tunnelsPanel:       components.NewTunnelsPanel(),
 		cloudWatchLogsPanel: components.NewCloudWatchLogsPanel(),
-		profileSelector:     profileSelector,
-		commandPalette:      components.NewCommandPalette(),
+		profileSelector:    profileSelector,
+		commandPalette:     components.NewCommandPalette(),
 		actionBar:          components.NewActionBar(),
 		refreshIndicator:   components.NewRefreshIndicator(),
 		xrayTree:           components.NewXRayTree(),
@@ -350,12 +368,14 @@ func NewWithProfileSelection(profiles []string, region string, logger *log.Logge
 
 // Init implements tea.Model.
 func (m *Model) Init() tea.Cmd {
-	// If in profile selection mode, don't load stacks yet
+	// If in profile selection mode, don't load anything yet
 	if m.state.View == state.ViewProfileSelect {
 		return nil
 	}
+	// Start at main menu - don't load stacks automatically
+	// User will select what to load from the main menu
+	m.updateMainMenuList()
 	return tea.Batch(
-		m.loadStacks(),
 		m.splash.TickCmd(),           // Start splash animation
 		m.refreshIndicator.TickCmd(), // Start auto-refresh timer
 	)
@@ -429,11 +449,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.apiGWManager = tunnel.NewAPIGatewayManager(msg.client.Profile(), msg.client.Region())
 		m.state.Profile = msg.client.Profile()
 		m.state.Region = msg.client.Region()
-		m.state.View = state.ViewStacks
+		m.state.View = state.ViewMain
 		m.showSplash = true
 		m.updateComponentSizes()
-		// Start loading stacks
-		return m, tea.Batch(m.loadStacks(), m.splash.TickCmd())
+		m.updateMainMenuList()
+		// Show main menu - don't load stacks automatically
+		return m, m.splash.TickCmd()
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -456,9 +477,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update list spinners for loading states
 		m.stacksList.Spinner().Tick()
 		m.serviceList.Spinner().Tick()
+		m.sqsTable.Spinner().Tick()
+		m.lambdaList.Spinner().Tick()
+		m.apiGatewayList.Spinner().Tick()
+		m.ec2List.Spinner().Tick()
 
 		// Keep ticking while anything is loading
-		if m.state.StacksLoading || m.state.ServicesLoading {
+		if m.state.StacksLoading || m.state.ServicesLoading || m.state.QueuesLoading ||
+			m.state.FunctionsLoading || m.state.APIsLoading || m.state.EC2InstancesLoading {
 			cmds = append(cmds, m.stacksList.Spinner().TickCmd())
 		}
 
@@ -832,6 +858,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 		}
 
+	case queuesLoadedMsg:
+		m.state.QueuesLoading = false
+		m.sqsTable.SetLoading(false)
+		m.refreshIndicator.SetRefreshing(false)
+		if msg.err != nil {
+			m.state.QueuesError = msg.err
+			m.logger.Error("Failed to load SQS queues: %v", msg.err)
+		} else {
+			m.state.Queues = msg.queues
+			m.state.QueuesError = nil
+			m.logger.Info("Loaded %d SQS queues", len(msg.queues))
+		}
+		m.updateQueuesList()
+
 	default:
 		// Pass other messages to filter input if filtering
 		if m.filtering {
@@ -1044,6 +1084,8 @@ func (m *Model) startFiltering() {
 
 func (m *Model) moveCursorUp() {
 	switch m.state.View {
+	case state.ViewMain:
+		m.mainMenuList.Up()
 	case state.ViewStacks:
 		m.stacksList.Up()
 		m.updateStackDetails()
@@ -1065,6 +1107,9 @@ func (m *Model) moveCursorUp() {
 		m.ec2List.Up()
 	case state.ViewContainerSelect:
 		m.containerList.Up()
+	case state.ViewSQS:
+		m.sqsTable.Up()
+		m.updateQueueDetails()
 	case state.ViewTunnels:
 		m.tunnelsPanel.Up()
 	}
@@ -1072,6 +1117,8 @@ func (m *Model) moveCursorUp() {
 
 func (m *Model) moveCursorDown() {
 	switch m.state.View {
+	case state.ViewMain:
+		m.mainMenuList.Down()
 	case state.ViewStacks:
 		m.stacksList.Down()
 		m.updateStackDetails()
@@ -1093,6 +1140,9 @@ func (m *Model) moveCursorDown() {
 		m.ec2List.Down()
 	case state.ViewContainerSelect:
 		m.containerList.Down()
+	case state.ViewSQS:
+		m.sqsTable.Down()
+		m.updateQueueDetails()
 	case state.ViewTunnels:
 		m.tunnelsPanel.Down()
 	}
@@ -1100,6 +1150,8 @@ func (m *Model) moveCursorDown() {
 
 func (m *Model) moveCursorTop() {
 	switch m.state.View {
+	case state.ViewMain:
+		m.mainMenuList.Top()
 	case state.ViewStacks:
 		m.stacksList.Top()
 		m.updateStackDetails()
@@ -1121,11 +1173,16 @@ func (m *Model) moveCursorTop() {
 		m.ec2List.Top()
 	case state.ViewContainerSelect:
 		m.containerList.Top()
+	case state.ViewSQS:
+		m.sqsTable.Top()
+		m.updateQueueDetails()
 	}
 }
 
 func (m *Model) moveCursorBottom() {
 	switch m.state.View {
+	case state.ViewMain:
+		m.mainMenuList.Bottom()
 	case state.ViewStacks:
 		m.stacksList.Bottom()
 		m.updateStackDetails()
@@ -1147,11 +1204,39 @@ func (m *Model) moveCursorBottom() {
 		m.ec2List.Bottom()
 	case state.ViewContainerSelect:
 		m.containerList.Bottom()
+	case state.ViewSQS:
+		m.sqsTable.Bottom()
+		m.updateQueueDetails()
 	}
 }
 
 func (m *Model) handleEnter() tea.Cmd {
 	switch m.state.View {
+	case state.ViewMain:
+		item := m.mainMenuList.SelectedItem()
+		if item == nil {
+			return nil
+		}
+		m.state.FilterText = ""
+		m.filterInput.SetValue("")
+		switch item.ID {
+		case "cloudformation-stacks":
+			m.state.View = state.ViewStacks
+			m.updateMenuBar()
+			return m.loadStacks()
+		case "sqs-queues":
+			// Go directly to SQS view (no stack filter)
+			m.state.SelectedStack = nil
+			m.state.View = state.ViewSQS
+			m.updateMenuBar()
+			// Only load if not already loaded
+			if len(m.state.Queues) == 0 && !m.state.QueuesLoading {
+				return m.loadQueues()
+			}
+			m.updateQueuesList()
+			return nil
+		}
+		return nil
 	case state.ViewStacks:
 		item := m.stacksList.SelectedItem()
 		if item == nil {
@@ -1189,6 +1274,10 @@ func (m *Model) handleEnter() tea.Cmd {
 			m.state.View = state.ViewAPIGateway
 			m.updateMenuBar()
 			return m.loadAPIs()
+		case "sqs-queues":
+			m.state.View = state.ViewSQS
+			m.updateMenuBar()
+			return m.loadQueues()
 		}
 		return nil
 	case state.ViewAPIGateway:
@@ -1287,6 +1376,14 @@ func (m *Model) handleEnter() tea.Cmd {
 
 func (m *Model) handleBack() {
 	switch m.state.View {
+	case state.ViewStacks:
+		// Go back to main menu
+		m.state.View = state.ViewMain
+		m.state.FilterText = ""
+		m.filterInput.SetValue("")
+		m.state.ClearStacks()
+		m.updateMenuBar()
+		m.updateMainMenuList()
 	case state.ViewStackResources:
 		m.state.View = state.ViewStacks
 		m.state.SelectedStack = nil
@@ -1320,6 +1417,21 @@ func (m *Model) handleBack() {
 			m.state.ClearAPIs()
 			m.updateMenuBar()
 			m.updateStackResourcesList()
+		}
+	case state.ViewSQS:
+		m.state.FilterText = ""
+		m.filterInput.SetValue("")
+		// If we came from stack resources, go back there and clear stack-specific queues
+		if m.state.SelectedStack != nil {
+			m.state.ClearQueues() // Clear stack-specific queues
+			m.state.View = state.ViewStackResources
+			m.updateMenuBar()
+			m.updateStackResourcesList()
+		} else {
+			// Going back to main menu - keep queues cached
+			m.state.View = state.ViewMain
+			m.updateMenuBar()
+			m.updateMainMenuList()
 		}
 	case state.ViewAPIStages:
 		m.state.GoBack()
@@ -1381,6 +1493,8 @@ func (m *Model) handleRefresh() tea.Cmd {
 		return m.loadEC2Instances()
 	case state.ViewTunnels:
 		m.updateTunnelsPanel()
+	case state.ViewSQS:
+		return m.loadQueues()
 	}
 	return nil
 }
@@ -2182,6 +2296,101 @@ func (m *Model) loadEC2Instances() tea.Cmd {
 	)
 }
 
+func (m *Model) loadQueues() tea.Cmd {
+	m.state.QueuesLoading = true
+	m.sqsTable.SetLoading(true)
+
+	// Check if a stack is selected - if so, only load queues from that stack
+	var stackName string
+	if m.state.SelectedStack != nil {
+		stackName = m.state.SelectedStack.Name
+		m.logger.Info("Loading SQS queues for stack: %s", stackName)
+	} else {
+		m.logger.Info("Loading all SQS queues...")
+	}
+
+	return tea.Batch(
+		m.sqsTable.Spinner().TickCmd(),
+		func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			if stackName != "" {
+				// Get queue URLs from the stack
+				queueURLs, err := m.client.GetQueuesFromStack(ctx, stackName)
+				if err != nil {
+					return queuesLoadedMsg{queues: nil, err: err}
+				}
+
+				// If no queues in stack, return empty list
+				if len(queueURLs) == 0 {
+					return queuesLoadedMsg{queues: []model.Queue{}, err: nil}
+				}
+
+				// Get details for each queue
+				var queues []model.Queue
+				for _, url := range queueURLs {
+					queue, err := m.client.GetQueueAttributes(ctx, url)
+					if err != nil {
+						// Log but continue with other queues
+						continue
+					}
+					queues = append(queues, *queue)
+				}
+
+				// Fetch DLQ message counts
+				queues = m.enrichQueuesWithDLQ(ctx, queues)
+
+				return queuesLoadedMsg{queues: queues, err: nil}
+			}
+
+			// No stack selected - load all queues
+			queues, err := m.client.ListQueues(ctx)
+			return queuesLoadedMsg{queues: queues, err: err}
+		},
+	)
+}
+
+func (m *Model) enrichQueuesWithDLQ(ctx context.Context, queues []model.Queue) []model.Queue {
+	// Build ARN -> URL map for DLQ lookups
+	dlqURLMap := make(map[string]string)
+	for _, q := range queues {
+		if q.ARN != "" {
+			dlqURLMap[q.ARN] = q.URL
+		}
+	}
+
+	// Fetch DLQ message counts
+	for i := range queues {
+		if queues[i].HasDLQ && queues[i].DLQArn != "" {
+			dlqURL, ok := dlqURLMap[queues[i].DLQArn]
+			if ok {
+				out, err := m.client.SQS().GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
+					QueueUrl:       &dlqURL,
+					AttributeNames: []sqstypes.QueueAttributeName{sqstypes.QueueAttributeNameApproximateNumberOfMessages},
+				})
+				if err == nil {
+					if countStr, ok := out.Attributes[string(sqstypes.QueueAttributeNameApproximateNumberOfMessages)]; ok {
+						count, _ := strconv.Atoi(countStr)
+						queues[i].DLQMessageCount = count
+						queues[i].DLQURL = dlqURL
+						queues[i].DLQName = extractQueueNameFromURL(dlqURL)
+					}
+				}
+			}
+		}
+	}
+	return queues
+}
+
+func extractQueueNameFromURL(url string) string {
+	parts := strings.Split(url, "/")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	return url
+}
+
 func (m *Model) loadAPIStages() tea.Cmd {
 	m.state.APIStagesLoading = true
 	m.apiStagesList.SetLoading(true)
@@ -2265,7 +2474,12 @@ func (m *Model) updateMenuBar() {
 	var resourceCount int
 
 	switch m.state.View {
+	case state.ViewMain:
+		m.menuBar.AddCrumb("Resources", components.ResourceMain)
+		resourceType = components.ResourceMain
+		resourceCount = 2 // CloudFormation Stacks, SQS Queues
 	case state.ViewStacks:
+		m.menuBar.AddCrumb("Resources", components.ResourceMain)
 		m.menuBar.AddCrumb("Stacks", components.ResourceStacks)
 		resourceType = components.ResourceStacks
 		resourceCount = len(m.state.FilteredStacks())
@@ -2276,7 +2490,7 @@ func (m *Model) updateMenuBar() {
 		}
 		m.menuBar.AddCrumb("Resources", components.ResourceStackResources)
 		resourceType = components.ResourceStackResources
-		resourceCount = 3 // ECS, Lambda, API Gateway
+		resourceCount = 4 // ECS, Lambda, API Gateway, SQS
 	case state.ViewClusters:
 		m.menuBar.AddCrumb("Clusters", components.ResourceClusters)
 		resourceType = components.ResourceClusters
@@ -2339,6 +2553,18 @@ func (m *Model) updateMenuBar() {
 			m.menuBar.AddCrumb(m.state.SelectedStack.Name+" (XRay)", components.ResourceStacks)
 		}
 		resourceType = components.ResourceStacks
+	case state.ViewSQS:
+		if m.state.SelectedStack != nil {
+			// Accessed from stack resources
+			m.menuBar.AddCrumb("Stacks", components.ResourceStacks)
+			m.menuBar.AddCrumb(m.state.SelectedStack.Name, components.ResourceStacks)
+		} else {
+			// Accessed from main menu
+			m.menuBar.AddCrumb("Resources", components.ResourceMain)
+		}
+		m.menuBar.AddCrumb("SQS", components.ResourceSQS)
+		resourceType = components.ResourceSQS
+		resourceCount = len(m.state.FilteredQueues())
 	}
 
 	// Set resource count
@@ -2360,6 +2586,39 @@ func (m *Model) updateMenuBar() {
 
 	// Update refresh indicator state
 	m.menuBar.RefreshIndicator().SetEnabled(m.state.AutoRefresh)
+}
+
+func (m *Model) updateMainMenuList() {
+	// Show main resource types
+	items := []components.ListItem{
+		{
+			ID:          "cloudformation-stacks",
+			Title:       "CloudFormation Stacks",
+			Description: "Browse resources organized by CloudFormation stacks",
+			Status:      "📦",
+			StatusStyle: lipgloss.NewStyle().Foreground(theme.Warning),
+		},
+		{
+			ID:          "sqs-queues",
+			Title:       "SQS Queues",
+			Description: "View all SQS queues in the region",
+			Status:      "📨",
+			StatusStyle: lipgloss.NewStyle().Foreground(theme.Info),
+		},
+	}
+	m.mainMenuList.SetItems(items)
+	m.mainMenuList.SetLoading(false)
+	m.mainMenuList.SetError(nil)
+	m.mainMenuList.SetEmptyMessage("No resources available")
+
+	// Clear details pane
+	m.details.SetTitle("AWS Resources")
+	m.details.SetRows([]components.DetailRow{
+		{Label: "Profile", Value: m.state.Profile},
+		{Label: "Region", Value: m.state.Region},
+		{Label: "", Value: ""},
+		{Label: "Hint", Value: "Select a resource type to browse"},
+	})
 }
 
 func (m *Model) updateStacksList() {
@@ -2402,6 +2661,13 @@ func (m *Model) updateStackResourcesList() {
 			Description: "View API Gateway REST and HTTP APIs",
 			Status:      "🌐",
 			StatusStyle: lipgloss.NewStyle().Foreground(theme.Success),
+		},
+		{
+			ID:          "sqs-queues",
+			Title:       "SQS Queues",
+			Description: "View SQS queues with DLQ visibility",
+			Status:      "📨",
+			StatusStyle: lipgloss.NewStyle().Foreground(theme.Info),
 		},
 	}
 	m.stackResourcesList.SetItems(items)
@@ -2581,8 +2847,76 @@ func (m *Model) updateContainerList() {
 	m.containerList.SetEmptyMessage("No containers found")
 }
 
+func (m *Model) updateQueuesList() {
+	queues := m.state.FilteredQueues()
+	m.sqsTable.SetQueues(queues)
+	m.sqsTable.SetLoading(false)
+	m.sqsTable.SetError(m.state.QueuesError)
+	m.updateQueueDetails()
+}
+
+func (m *Model) updateQueueDetails() {
+	q := m.sqsTable.SelectedQueue()
+	if q == nil {
+		m.details.SetTitle("SQS Queue Details")
+		m.details.SetRows(nil)
+		return
+	}
+
+	rows := []components.DetailRow{
+		{Label: "Name", Value: q.Name},
+		{Label: "Type", Value: string(q.Type)},
+		{Label: "", Value: ""}, // Spacer
+		{Label: "Messages", Value: fmt.Sprintf("%d", q.ApproximateMessageCount)},
+		{Label: "In Flight", Value: fmt.Sprintf("%d", q.ApproximateInFlight)},
+		{Label: "", Value: ""}, // Spacer
+		{Label: "Visibility", Value: fmt.Sprintf("%ds", q.VisibilityTimeout)},
+		{Label: "Retention", Value: formatDuration(q.MessageRetentionPeriod)},
+		{Label: "Delay", Value: fmt.Sprintf("%ds", q.DelaySeconds)},
+	}
+
+	if !q.CreatedAt.IsZero() {
+		rows = append(rows, components.DetailRow{Label: "Created", Value: q.CreatedAt.Format("2006-01-02")})
+	}
+
+	// Add DLQ info if present
+	if q.HasDLQ {
+		rows = append(rows, components.DetailRow{Label: "", Value: ""}) // Spacer
+		rows = append(rows, components.DetailRow{Label: "DLQ", Value: q.DLQName})
+		dlqMsg := "0"
+		if q.DLQMessageCount > 0 {
+			dlqMsg = fmt.Sprintf("%d (warning!)", q.DLQMessageCount)
+		}
+		rows = append(rows, components.DetailRow{Label: "DLQ Messages", Value: dlqMsg})
+		rows = append(rows, components.DetailRow{Label: "Max Receives", Value: fmt.Sprintf("%d", q.MaxReceiveCount)})
+	}
+
+	rows = append(rows, components.DetailRow{Label: "", Value: ""}) // Spacer
+	rows = append(rows, components.DetailRow{Label: "URL", Value: q.URL})
+	rows = append(rows, components.DetailRow{Label: "ARN", Value: q.ARN})
+
+	m.details.SetTitle("SQS Queue Details")
+	m.details.SetRows(rows)
+}
+
+func formatDuration(seconds int) string {
+	if seconds >= 86400 {
+		days := seconds / 86400
+		return fmt.Sprintf("%d days", days)
+	} else if seconds >= 3600 {
+		hours := seconds / 3600
+		return fmt.Sprintf("%d hours", hours)
+	} else if seconds >= 60 {
+		mins := seconds / 60
+		return fmt.Sprintf("%d mins", mins)
+	}
+	return fmt.Sprintf("%ds", seconds)
+}
+
 func (m *Model) updateCurrentList() {
 	switch m.state.View {
+	case state.ViewMain:
+		m.updateMainMenuList()
 	case state.ViewStacks:
 		m.updateStacksList()
 	case state.ViewStackResources:
@@ -2599,6 +2933,8 @@ func (m *Model) updateCurrentList() {
 		m.updateEC2List()
 	case state.ViewContainerSelect:
 		m.updateContainerList()
+	case state.ViewSQS:
+		m.updateQueuesList()
 	}
 }
 
@@ -2987,11 +3323,17 @@ func (m *Model) renderMainContent(layout layoutMode, contentHeight int) string {
 	if layout == layoutSingle {
 		listWidth = m.width
 	} else {
-		listWidth = int(float64(m.width) * listPaneRatio)
+		// SQS view uses 60% for list, 40% for details
+		if m.state.View == state.ViewSQS {
+			listWidth = int(float64(m.width) * 0.60)
+		} else {
+			listWidth = int(float64(m.width) * listPaneRatio)
+		}
 		detailsWidth = m.width - listWidth
 	}
 
 	// Set sizes on all lists BEFORE calling View()
+	m.mainMenuList.SetSize(listWidth, contentHeight)
 	m.stacksList.SetSize(listWidth, contentHeight)
 	m.stackResourcesList.SetSize(listWidth, contentHeight)
 	m.serviceList.SetSize(listWidth, contentHeight)
@@ -3000,6 +3342,7 @@ func (m *Model) renderMainContent(layout layoutMode, contentHeight int) string {
 	m.apiStagesList.SetSize(listWidth, contentHeight)
 	m.ec2List.SetSize(listWidth, contentHeight)
 	m.containerList.SetSize(listWidth, contentHeight)
+	m.sqsTable.SetSize(listWidth, contentHeight)
 	if layout != layoutSingle {
 		m.details.SetSize(detailsWidth, contentHeight)
 	}
@@ -3007,6 +3350,8 @@ func (m *Model) renderMainContent(layout layoutMode, contentHeight int) string {
 	// Now render the list view with correct size
 	var listView string
 	switch m.state.View {
+	case state.ViewMain:
+		listView = m.mainMenuList.View()
 	case state.ViewStacks:
 		listView = m.stacksList.View()
 	case state.ViewStackResources:
@@ -3023,6 +3368,8 @@ func (m *Model) renderMainContent(layout layoutMode, contentHeight int) string {
 		listView = m.ec2List.View()
 	case state.ViewContainerSelect:
 		listView = m.containerList.View()
+	case state.ViewSQS:
+		listView = m.sqsTable.View()
 	}
 
 	// Filter input (shown above list when filtering)

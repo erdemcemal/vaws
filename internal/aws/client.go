@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 )
 
@@ -33,6 +34,7 @@ type Client struct {
 	ec2     *ec2.Client
 	ssm     *ssm.Client
 	cwlogs  *cloudwatchlogs.Client
+	sqs     *sqs.Client
 }
 
 // NewClient creates a new AWS client using the specified profile.
@@ -70,6 +72,7 @@ func NewClient(ctx context.Context, profile, region string) (*Client, error) {
 		ec2:     ec2.NewFromConfig(cfg),
 		ssm:     ssm.NewFromConfig(cfg),
 		cwlogs:  cloudwatchlogs.NewFromConfig(cfg),
+		sqs:     sqs.NewFromConfig(cfg),
 	}, nil
 }
 
@@ -121,6 +124,11 @@ func (c *Client) SSM() *ssm.Client {
 // CloudWatchLogs returns the CloudWatch Logs client.
 func (c *Client) CloudWatchLogs() *cloudwatchlogs.Client {
 	return c.cwlogs
+}
+
+// SQS returns the SQS client.
+func (c *Client) SQS() *sqs.Client {
+	return c.sqs
 }
 
 // Config returns the underlying AWS config.
