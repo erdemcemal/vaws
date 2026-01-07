@@ -119,7 +119,7 @@ func StackDetails(name, status, createdAt, updatedAt, description string, status
 }
 
 // ServiceDetails returns detail rows for an ECS service.
-func ServiceDetails(name, cluster, status string, running, desired, pending int, taskDef, launchType string, statusStyle lipgloss.Style) []DetailRow {
+func ServiceDetails(name, cluster, status string, running, desired, pending int, taskDef, launchType string, containerPorts string, statusStyle lipgloss.Style) []DetailRow {
 	s := theme.DefaultStyles()
 
 	rows := []DetailRow{
@@ -146,6 +146,10 @@ func ServiceDetails(name, cluster, status string, running, desired, pending int,
 
 	if launchType != "" {
 		rows = append(rows, DetailRow{Label: "Launch Type", Value: launchType})
+	}
+
+	if containerPorts != "" {
+		rows = append(rows, DetailRow{Label: "Containers", Value: containerPorts})
 	}
 
 	return rows

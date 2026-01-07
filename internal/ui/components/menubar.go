@@ -72,6 +72,7 @@ func NewMenuBar() *MenuBar {
 			{Key: "<?>", Desc: "Help"},
 			{Key: "</>", Desc: "Filter"},
 			{Key: "<:>", Desc: "Command"},
+			{Key: "<l>", Desc: "Logs"},
 			{Key: "<q>", Desc: "Quit"},
 		},
 	}

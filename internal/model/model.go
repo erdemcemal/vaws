@@ -2,7 +2,11 @@
 // These types are decoupled from AWS SDK types to keep the UI and business logic clean.
 package model
 
-import "time"
+import (
+	"sort"
+	"strings"
+	"time"
+)
 
 // StackStatus represents the status of a CloudFormation stack.
 type StackStatus string
@@ -92,6 +96,12 @@ const (
 	ServiceStatusInactive ServiceStatus = "INACTIVE"
 )
 
+// ContainerPort represents a container and its exposed ports.
+type ContainerPort struct {
+	ContainerName string
+	Ports         []int
+}
+
 // Service represents an ECS service.
 type Service struct {
 	Name                 string
@@ -107,6 +117,7 @@ type Service struct {
 	CreatedAt            time.Time
 	Deployments          []Deployment
 	EnableExecuteCommand bool
+	ContainerPorts       []ContainerPort // Container name -> ports mapping
 }
 
 // Task represents an ECS task.
@@ -130,6 +141,102 @@ type Container struct {
 	LastStatus      string
 	Image           string
 	NetworkBindings []NetworkBinding
+	PortMappings    []PortMapping // Ports from task definition
+}
+
+// PortMapping represents a port mapping from the task definition.
+type PortMapping struct {
+	ContainerPort int
+	HostPort      int
+	Protocol      string
+	Name          string // Optional port name
+}
+
+// GetExposedPorts returns all ports this container exposes.
+// It combines NetworkBindings (for EC2/bridge) and PortMappings (for Fargate/awsvpc).
+// Ports are returned in ascending order for consistency.
+func (c *Container) GetExposedPorts() []int {
+	portSet := make(map[int]bool)
+
+	// Add ports from NetworkBindings (EC2 launch type)
+	for _, nb := range c.NetworkBindings {
+		if nb.ContainerPort > 0 {
+			portSet[nb.ContainerPort] = true
+		}
+	}
+
+	// Add ports from PortMappings (Fargate or task definition)
+	for _, pm := range c.PortMappings {
+		if pm.ContainerPort > 0 {
+			portSet[pm.ContainerPort] = true
+		}
+	}
+
+	// Convert to slice and sort
+	ports := make([]int, 0, len(portSet))
+	for port := range portSet {
+		ports = append(ports, port)
+	}
+	sort.Ints(ports)
+
+	return ports
+}
+
+// IsSidecar returns true if this container looks like a sidecar/helper container.
+func (c *Container) IsSidecar() bool {
+	name := strings.ToLower(c.Name)
+	sidecars := []string{
+		"otel", "opentelemetry", "collector",
+		"datadog", "dd-agent",
+		"xray", "x-ray", "aws-xray",
+		"envoy", "proxy",
+		"fluentbit", "fluent-bit", "fluentd",
+		"cloudwatch-agent", "cwagent",
+		"newrelic", "nr-",
+		"splunk",
+		"jaeger",
+		"zipkin",
+		"prometheus",
+		"grafana-agent",
+	}
+	for _, s := range sidecars {
+		if strings.Contains(name, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasAppPort returns true if this container exposes common application ports.
+func (c *Container) HasAppPort() bool {
+	appPorts := map[int]bool{80: true, 443: true, 8080: true, 8000: true, 3000: true, 5000: true, 9000: true}
+	for _, port := range c.GetExposedPorts() {
+		if appPorts[port] {
+			return true
+		}
+	}
+	return false
+}
+
+// GetBestPort returns the best port for port forwarding (prefers common app ports).
+func (c *Container) GetBestPort() int {
+	ports := c.GetExposedPorts()
+	if len(ports) == 0 {
+		return 80 // Default fallback
+	}
+
+	// Prefer common app ports in order of preference
+	preferredPorts := []int{80, 8080, 443, 8000, 3000, 5000, 9000}
+	for _, preferred := range preferredPorts {
+		for _, port := range ports {
+			if port == preferred {
+				return port
+			}
+		}
+	}
+
+	// Return first port if no preferred port found
+	return ports[0]
 }
 
 // NetworkBinding represents a port binding in a container.

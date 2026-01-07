@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -105,7 +106,15 @@ func (c *Client) DescribeServices(ctx context.Context, clusterARN string, servic
 		}
 
 		for _, svc := range out.Services {
-			services = append(services, convertService(svc))
+			service := convertService(svc)
+
+			// Fetch container ports from task definition
+			if svc.TaskDefinition != nil {
+				containerPorts := c.getContainerPortsFromTaskDef(ctx, aws.ToString(svc.TaskDefinition))
+				service.ContainerPorts = containerPorts
+			}
+
+			services = append(services, service)
 		}
 	}
 
@@ -133,52 +142,55 @@ func (c *Client) DescribeService(ctx context.Context, clusterARN, serviceName st
 	return &svc, nil
 }
 
-// GetServicesForStack returns ECS services that belong to a CloudFormation stack.
-// It finds services by looking at stack resources.
+// GetServicesForStack returns ECS services for clusters defined in a CloudFormation stack.
+// It finds the cluster(s) from the stack and lists ALL services in those clusters.
 func (c *Client) GetServicesForStack(ctx context.Context, stackName string) ([]model.Service, error) {
 	log.Info("Getting ECS services for stack: %s", stackName)
 
-	// Get ECS service ARNs from stack resources
-	serviceIDs, err := c.GetECSServicesFromStack(ctx, stackName)
+	// Get ECS cluster(s) from stack resources
+	clusterIDs, err := c.GetECSClustersFromStack(ctx, stackName)
 	if err != nil {
 		return nil, err
 	}
 
-	if len(serviceIDs) == 0 {
-		log.Debug("No ECS services found in stack %s", stackName)
+	// If no clusters found in stack, try to infer from service ARNs
+	if len(clusterIDs) == 0 {
+		serviceIDs, err := c.GetECSServicesFromStack(ctx, stackName)
+		if err != nil {
+			return nil, err
+		}
+		// Extract cluster names from service ARNs
+		clusterSet := make(map[string]bool)
+		for _, svcID := range serviceIDs {
+			if cluster := ExtractClusterFromServiceARN(svcID); cluster != "" {
+				clusterSet[cluster] = true
+			}
+		}
+		for cluster := range clusterSet {
+			clusterIDs = append(clusterIDs, cluster)
+		}
+	}
+
+	if len(clusterIDs) == 0 {
+		log.Debug("No ECS clusters found in stack %s", stackName)
 		return nil, nil
 	}
 
-	// Group services by cluster
-	servicesByCluster := make(map[string][]string)
-	for _, svcID := range serviceIDs {
-		var cluster string
-		if strings.Contains(svcID, "/") {
-			// ARN format: arn:aws:ecs:region:account:service/cluster-name/service-name
-			cluster = ExtractClusterFromServiceARN(svcID)
-		}
-		if cluster == "" {
-			// Try to infer cluster from stack's ECS cluster resources
-			clusters, _ := c.GetECSClustersFromStack(ctx, stackName)
-			if len(clusters) > 0 {
-				cluster = clusters[0]
-			}
-		}
-		if cluster != "" {
-			servicesByCluster[cluster] = append(servicesByCluster[cluster], svcID)
-		}
-	}
-
-	// Describe all services
+	// List ALL services in each cluster (not just CF-defined ones)
 	var allServices []model.Service
-	for cluster, svcARNs := range servicesByCluster {
-		services, err := c.DescribeServices(ctx, cluster, svcARNs)
+	for _, clusterID := range clusterIDs {
+		services, err := c.ListServices(ctx, clusterID)
 		if err != nil {
-			log.Warn("Failed to describe services in cluster %s: %v", cluster, err)
+			log.Warn("Failed to list services in cluster %s: %v", clusterID, err)
 			continue
 		}
 		allServices = append(allServices, services...)
 	}
+
+	// Sort services alphabetically by name (case-insensitive)
+	sort.Slice(allServices, func(i, j int) bool {
+		return strings.ToLower(allServices[i].Name) < strings.ToLower(allServices[j].Name)
+	})
 
 	log.Info("Found %d ECS services for stack %s", len(allServices), stackName)
 	return allServices, nil
@@ -249,6 +261,9 @@ func (c *Client) ListTasksForService(ctx context.Context, clusterARN, serviceNam
 		return nil, fmt.Errorf("failed to describe tasks: %w", err)
 	}
 
+	// Cache for task definitions to avoid redundant API calls
+	taskDefCache := make(map[string][]ecstypes.ContainerDefinition)
+
 	var tasks []model.Task
 	for _, t := range descOut.Tasks {
 		task := model.Task{
@@ -267,6 +282,28 @@ func (c *Client) ListTasksForService(ctx context.Context, clusterARN, serviceNam
 			task.TaskID = parts[len(parts)-1]
 		}
 
+		// Get port mappings from task definition (for Fargate/awsvpc networking)
+		taskDefARN := aws.ToString(t.TaskDefinitionArn)
+		containerDefs, ok := taskDefCache[taskDefARN]
+		if !ok && taskDefARN != "" {
+			containerDefs = c.getContainerDefinitions(ctx, taskDefARN)
+			taskDefCache[taskDefARN] = containerDefs
+		}
+
+		// Build a map of container name -> port mappings from task definition
+		containerPortMap := make(map[string][]model.PortMapping)
+		for _, cd := range containerDefs {
+			name := aws.ToString(cd.Name)
+			for _, pm := range cd.PortMappings {
+				containerPortMap[name] = append(containerPortMap[name], model.PortMapping{
+					ContainerPort: int(aws.ToInt32(pm.ContainerPort)),
+					HostPort:      int(aws.ToInt32(pm.HostPort)),
+					Protocol:      string(pm.Protocol),
+					Name:          aws.ToString(pm.Name),
+				})
+			}
+		}
+
 		// Get container details
 		for _, cont := range t.Containers {
 			container := model.Container{
@@ -277,12 +314,18 @@ func (c *Client) ListTasksForService(ctx context.Context, clusterARN, serviceNam
 				Image:        aws.ToString(cont.Image),
 			}
 
+			// Add NetworkBindings (for EC2/bridge networking)
 			for _, nb := range cont.NetworkBindings {
 				container.NetworkBindings = append(container.NetworkBindings, model.NetworkBinding{
 					ContainerPort: int(aws.ToInt32(nb.ContainerPort)),
 					HostPort:      int(aws.ToInt32(nb.HostPort)),
 					Protocol:      string(nb.Protocol),
 				})
+			}
+
+			// Add PortMappings from task definition (for Fargate/awsvpc)
+			if ports, ok := containerPortMap[container.Name]; ok {
+				container.PortMappings = ports
 			}
 
 			task.Containers = append(task.Containers, container)
@@ -293,6 +336,47 @@ func (c *Client) ListTasksForService(ctx context.Context, clusterARN, serviceNam
 
 	log.Info("Found %d tasks for service %s", len(tasks), serviceName)
 	return tasks, nil
+}
+
+// getContainerDefinitions fetches container definitions from a task definition.
+func (c *Client) getContainerDefinitions(ctx context.Context, taskDefARN string) []ecstypes.ContainerDefinition {
+	out, err := c.ecs.DescribeTaskDefinition(ctx, &ecs.DescribeTaskDefinitionInput{
+		TaskDefinition: aws.String(taskDefARN),
+	})
+	if err != nil {
+		log.Debug("Failed to describe task definition %s: %v", taskDefARN, err)
+		return nil
+	}
+	if out.TaskDefinition == nil {
+		return nil
+	}
+	return out.TaskDefinition.ContainerDefinitions
+}
+
+// getContainerPortsFromTaskDef fetches container names and their ports from a task definition.
+func (c *Client) getContainerPortsFromTaskDef(ctx context.Context, taskDefARN string) []model.ContainerPort {
+	containerDefs := c.getContainerDefinitions(ctx, taskDefARN)
+	if containerDefs == nil {
+		return nil
+	}
+
+	var containerPorts []model.ContainerPort
+	for _, cd := range containerDefs {
+		name := aws.ToString(cd.Name)
+		var ports []int
+		for _, pm := range cd.PortMappings {
+			if port := int(aws.ToInt32(pm.ContainerPort)); port > 0 {
+				ports = append(ports, port)
+			}
+		}
+		if len(ports) > 0 {
+			containerPorts = append(containerPorts, model.ContainerPort{
+				ContainerName: name,
+				Ports:         ports,
+			})
+		}
+	}
+	return containerPorts
 }
 
 // GetSSMTarget returns the SSM target string for port forwarding to a Fargate task.

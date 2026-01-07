@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -53,6 +54,11 @@ func (c *Client) ListStacks(ctx context.Context) ([]model.Stack, error) {
 			})
 		}
 	}
+
+	// Sort stacks alphabetically by name (case-insensitive)
+	sort.Slice(stacks, func(i, j int) bool {
+		return strings.ToLower(stacks[i].Name) < strings.ToLower(stacks[j].Name)
+	})
 
 	log.Info("Found %d CloudFormation stacks", len(stacks))
 	return stacks, nil

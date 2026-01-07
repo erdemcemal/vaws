@@ -390,12 +390,21 @@ func BuildTreeFromStack(stackName string, stackStatus string, services []Service
 
 			// Add container nodes
 			for _, container := range task.Containers {
+				// Build details with ports if available
+				details := container.Image
+				if len(container.Ports) > 0 {
+					portStrs := make([]string, len(container.Ports))
+					for i, p := range container.Ports {
+						portStrs[i] = fmt.Sprintf("%d", p)
+					}
+					details = fmt.Sprintf("%s [%s]", container.Image, strings.Join(portStrs, ","))
+				}
 				containerNode := &XRayNode{
 					ID:       container.Name,
 					Name:     container.Name,
 					Type:     NodeTypeContainer,
 					Status:   container.Status,
-					Details:  container.Image,
+					Details:  details,
 					Parent:   taskNode,
 					Children: []*XRayNode{},
 				}
@@ -435,4 +444,5 @@ type ContainerInfo struct {
 	Name   string
 	Status string
 	Image  string
+	Ports  []int
 }

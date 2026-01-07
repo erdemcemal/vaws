@@ -21,7 +21,8 @@ const (
 	ViewAPIGateway
 	ViewAPIStages
 	ViewAPIRoutes
-	ViewJumpHostSelect // Select jump host for private API Gateway tunnel
+	ViewJumpHostSelect    // Select jump host for private API Gateway tunnel
+	ViewContainerSelect   // Select container for port forwarding
 )
 
 // State holds all application state.
@@ -93,6 +94,11 @@ type State struct {
 	PendingTunnelStage     *model.APIStage
 	PendingTunnelLocalPort int
 
+	// Pending container selection for port forwarding
+	PendingContainerService *model.Service
+	PendingContainerTask    *model.Task
+	PendingContainers       []model.Container
+
 	// UI state
 	ShowLogs      bool
 	FilterText    string
@@ -105,7 +111,7 @@ type State struct {
 func New() *State {
 	return &State{
 		View:        ViewStacks,
-		ShowLogs:    false,
+		ShowLogs:    true, // Show logs by default
 		AutoRefresh: true,
 	}
 }
@@ -249,6 +255,13 @@ func (s *State) ClearPendingTunnel() {
 	s.PendingTunnelAPI = nil
 	s.PendingTunnelStage = nil
 	s.PendingTunnelLocalPort = 0
+}
+
+// ClearPendingContainer clears pending container selection.
+func (s *State) ClearPendingContainer() {
+	s.PendingContainerService = nil
+	s.PendingContainerTask = nil
+	s.PendingContainers = nil
 }
 
 // SelectStack sets the selected stack and changes view to services.
@@ -430,6 +443,21 @@ func (s *State) FilteredEC2Instances() []model.EC2Instance {
 	for _, inst := range s.EC2Instances {
 		if containsIgnoreCase(inst.Name, s.FilterText) || containsIgnoreCase(inst.InstanceID, s.FilterText) {
 			filtered = append(filtered, inst)
+		}
+	}
+	return filtered
+}
+
+// FilteredContainers returns containers filtered by the current filter text.
+func (s *State) FilteredContainers() []model.Container {
+	if s.FilterText == "" {
+		return s.PendingContainers
+	}
+
+	var filtered []model.Container
+	for _, c := range s.PendingContainers {
+		if containsIgnoreCase(c.Name, s.FilterText) {
+			filtered = append(filtered, c)
 		}
 	}
 	return filtered

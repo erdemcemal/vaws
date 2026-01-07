@@ -4,6 +4,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -172,6 +173,7 @@ type Model struct {
 	apiGatewayList     *components.List
 	apiStagesList      *components.List
 	ec2List            *components.List // For jump host selection
+	containerList      *components.List // For container selection in port forwarding
 	details            *components.Details
 	logs               *components.Logs
 	tunnelsPanel       *components.TunnelsPanel
@@ -188,9 +190,10 @@ type Model struct {
 	filtering   bool
 
 	// Port forward input
-	portInput          textinput.Model
-	enteringPort       bool
-	pendingPortForward *model.Service
+	portInput            textinput.Model
+	enteringPort         bool
+	pendingPortForward   *model.Service
+	pendingLocalPort     int // Stores local port while selecting container
 
 	// API Gateway port forward
 	pendingAPIGWPortForward *model.APIStage
@@ -247,6 +250,7 @@ func New(client *aws.Client, logger *log.Logger, version string) *Model {
 		apiGatewayList:     components.NewList("API Gateway"),
 		apiStagesList:      components.NewList("API Stages"),
 		ec2List:            components.NewList("Select Jump Host"),
+		containerList:      components.NewList("Select Container"),
 		details:            components.NewDetails(),
 		logs:               components.NewLogs(logger),
 		tunnelsPanel:       components.NewTunnelsPanel(),
@@ -304,6 +308,7 @@ func NewWithProfileSelection(profiles []string, region string, logger *log.Logge
 		apiGatewayList:     components.NewList("API Gateway"),
 		apiStagesList:      components.NewList("API Stages"),
 		ec2List:            components.NewList("Select Jump Host"),
+		containerList:      components.NewList("Select Container"),
 		details:            components.NewDetails(),
 		logs:               components.NewLogs(logger),
 		tunnelsPanel:       components.NewTunnelsPanel(),
@@ -472,7 +477,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.state.Stacks = msg.stacks
 			m.state.StacksError = nil
+			m.logger.Info("Loaded %d CloudFormation stacks", len(msg.stacks))
 			m.splash.SetLoading(fmt.Sprintf("Loaded %d stacks", len(msg.stacks)))
+			// Auto-dismiss splash when stacks loaded successfully
+			if m.showSplash {
+				m.showSplash = false
+			}
 		}
 		m.updateStacksList()
 
@@ -559,27 +569,42 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateComponentSizes()
 			return m, nil
 		}
-		// Use the first task and first container with a runtime ID
+
 		task := msg.tasks[0]
-		foundContainer := false
-		for _, container := range task.Containers {
-			if container.RuntimeID != "" {
-				foundContainer = true
-				// Default to port 80, but could be made configurable
-				remotePort := 80
-				if len(container.NetworkBindings) > 0 {
-					remotePort = container.NetworkBindings[0].ContainerPort
-				}
-				m.logger.Info("Found container '%s' with RuntimeID, starting tunnel to port %d...", container.Name, remotePort)
-				cmds = append(cmds, m.startTunnel(msg.service, task, container, remotePort))
-				break
+
+		// Get containers with RuntimeID
+		var containersWithRuntime []model.Container
+		for _, c := range task.Containers {
+			if c.RuntimeID != "" {
+				containersWithRuntime = append(containersWithRuntime, c)
 			}
 		}
-		if !foundContainer {
+
+		if len(containersWithRuntime) == 0 {
 			m.logger.Error("No container with RuntimeID found. Is ECS Exec enabled for service '%s'? Task: %s", msg.service.Name, task.TaskID)
 			m.state.ShowLogs = true
 			m.updateComponentSizes()
+			return m, nil
 		}
+
+		// If only one container, use it directly
+		if len(containersWithRuntime) == 1 {
+			container := &containersWithRuntime[0]
+			remotePort := container.GetBestPort()
+			m.logger.Info("Selected container '%s' for tunnel, port %d", container.Name, remotePort)
+			cmds = append(cmds, m.startTunnel(msg.service, task, *container, remotePort))
+			return m, tea.Batch(cmds...)
+		}
+
+		// Multiple containers - show container picker
+		m.logger.Info("Found %d containers - select one for port forwarding", len(containersWithRuntime))
+		m.state.PendingContainerService = &msg.service
+		m.state.PendingContainerTask = &task
+		m.state.PendingContainers = containersWithRuntime
+		m.pendingLocalPort = 0 // Use random port
+		m.state.View = state.ViewContainerSelect
+		m.updateContainerList()
+		m.updateMenuBar()
 
 	case tasksLoadedMsgWithPort:
 		if msg.err != nil {
@@ -594,30 +619,46 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateComponentSizes()
 			return m, nil
 		}
-		// Use the first task and first container with a runtime ID
+
 		task := msg.tasks[0]
-		foundContainer := false
-		for _, container := range task.Containers {
-			if container.RuntimeID != "" {
-				foundContainer = true
-				remotePort := 80
-				if len(container.NetworkBindings) > 0 {
-					remotePort = container.NetworkBindings[0].ContainerPort
-				}
-				localPortStr := "random"
-				if msg.localPort > 0 {
-					localPortStr = fmt.Sprintf("%d", msg.localPort)
-				}
-				m.logger.Info("Found container '%s', starting tunnel (local: %s, remote: %d)...", container.Name, localPortStr, remotePort)
-				cmds = append(cmds, m.startTunnelWithPort(msg.service, task, container, remotePort, msg.localPort))
-				break
+
+		// Get containers with RuntimeID
+		var containersWithRuntime []model.Container
+		for _, c := range task.Containers {
+			if c.RuntimeID != "" {
+				containersWithRuntime = append(containersWithRuntime, c)
 			}
 		}
-		if !foundContainer {
+
+		if len(containersWithRuntime) == 0 {
 			m.logger.Error("No container with RuntimeID found. Is ECS Exec enabled for service '%s'? Task: %s", msg.service.Name, task.TaskID)
 			m.state.ShowLogs = true
 			m.updateComponentSizes()
+			return m, nil
 		}
+
+		// If only one container, use it directly
+		if len(containersWithRuntime) == 1 {
+			container := &containersWithRuntime[0]
+			remotePort := container.GetBestPort()
+			localPortStr := "random"
+			if msg.localPort > 0 {
+				localPortStr = fmt.Sprintf("%d", msg.localPort)
+			}
+			m.logger.Info("Selected container '%s' for tunnel (local: %s, remote: %d)", container.Name, localPortStr, remotePort)
+			cmds = append(cmds, m.startTunnelWithPort(msg.service, task, *container, remotePort, msg.localPort))
+			return m, tea.Batch(cmds...)
+		}
+
+		// Multiple containers - show container picker
+		m.logger.Info("Found %d containers - select one for port forwarding", len(containersWithRuntime))
+		m.state.PendingContainerService = &msg.service
+		m.state.PendingContainerTask = &task
+		m.state.PendingContainers = containersWithRuntime
+		m.pendingLocalPort = msg.localPort
+		m.state.View = state.ViewContainerSelect
+		m.updateContainerList()
+		m.updateMenuBar()
 
 	case tasksLoadedMsgForRestart:
 		if msg.err != nil {
@@ -632,24 +673,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateComponentSizes()
 			return m, nil
 		}
-		// Use the first task and find a container with runtime ID
+		// Use the first task and find the original container by name
 		task := msg.tasks[0]
-		foundContainer := false
-		for _, container := range task.Containers {
-			if container.RuntimeID != "" {
-				foundContainer = true
-				// Create a service-like object for the tunnel start
-				service := model.Service{
-					Name:        msg.tunnelInfo.ServiceName,
-					ClusterARN:  msg.tunnelInfo.ClusterARN,
-					ClusterName: msg.tunnelInfo.ClusterName,
-				}
-				m.logger.Info("Restarting tunnel for '%s' (local: %d, remote: %d)...", msg.tunnelInfo.ServiceName, msg.tunnelInfo.LocalPort, msg.tunnelInfo.RemotePort)
-				cmds = append(cmds, m.startTunnelWithPort(service, task, container, msg.tunnelInfo.RemotePort, msg.tunnelInfo.LocalPort))
+		var container *model.Container
+		// Try to find the original container by name
+		for i := range task.Containers {
+			if task.Containers[i].Name == msg.tunnelInfo.ContainerName && task.Containers[i].RuntimeID != "" {
+				container = &task.Containers[i]
 				break
 			}
 		}
-		if !foundContainer {
+		// Fall back to best container if original not found
+		if container == nil {
+			container = findBestContainer(task.Containers)
+		}
+		if container != nil {
+			// Create a service-like object for the tunnel start
+			service := model.Service{
+				Name:        msg.tunnelInfo.ServiceName,
+				ClusterARN:  msg.tunnelInfo.ClusterARN,
+				ClusterName: msg.tunnelInfo.ClusterName,
+			}
+			m.logger.Info("Restarting tunnel for '%s' (local: %d, remote: %d)...", msg.tunnelInfo.ServiceName, msg.tunnelInfo.LocalPort, msg.tunnelInfo.RemotePort)
+			cmds = append(cmds, m.startTunnelWithPort(service, task, *container, msg.tunnelInfo.RemotePort, msg.tunnelInfo.LocalPort))
+		} else {
 			m.logger.Error("No container with RuntimeID found for restart. Task: %s", task.TaskID)
 			m.state.ShowLogs = true
 			m.updateComponentSizes()
@@ -915,6 +962,8 @@ func (m *Model) moveCursorUp() {
 		m.updateAPIStageDetails()
 	case state.ViewJumpHostSelect:
 		m.ec2List.Up()
+	case state.ViewContainerSelect:
+		m.containerList.Up()
 	case state.ViewTunnels:
 		m.tunnelsPanel.Up()
 	}
@@ -941,6 +990,8 @@ func (m *Model) moveCursorDown() {
 		m.updateAPIStageDetails()
 	case state.ViewJumpHostSelect:
 		m.ec2List.Down()
+	case state.ViewContainerSelect:
+		m.containerList.Down()
 	case state.ViewTunnels:
 		m.tunnelsPanel.Down()
 	}
@@ -967,6 +1018,8 @@ func (m *Model) moveCursorTop() {
 		m.updateAPIStageDetails()
 	case state.ViewJumpHostSelect:
 		m.ec2List.Top()
+	case state.ViewContainerSelect:
+		m.containerList.Top()
 	}
 }
 
@@ -991,6 +1044,8 @@ func (m *Model) moveCursorBottom() {
 		m.updateAPIStageDetails()
 	case state.ViewJumpHostSelect:
 		m.ec2List.Bottom()
+	case state.ViewContainerSelect:
+		m.containerList.Bottom()
 	}
 }
 
@@ -1086,6 +1141,45 @@ func (m *Model) handleEnter() tea.Cmd {
 				return m.startPrivateAPIGWTunnelWithJumpHost(jumpHost)
 			}
 		}
+	case state.ViewContainerSelect:
+		// User selected a container for port forwarding
+		item := m.containerList.SelectedItem()
+		if item == nil {
+			return nil
+		}
+		// Find the selected container
+		for i := range m.state.PendingContainers {
+			if m.state.PendingContainers[i].Name == item.ID {
+				container := m.state.PendingContainers[i]
+				service := m.state.PendingContainerService
+				task := m.state.PendingContainerTask
+
+				if service == nil || task == nil {
+					m.logger.Error("No pending service/task info found")
+					m.state.ClearPendingContainer()
+					return nil
+				}
+
+				remotePort := container.GetBestPort()
+				localPort := m.pendingLocalPort
+				localPortStr := "random"
+				if localPort > 0 {
+					localPortStr = fmt.Sprintf("%d", localPort)
+				}
+
+				m.logger.Info("Selected container '%s' for tunnel (local: %s, remote: %d)", container.Name, localPortStr, remotePort)
+
+				// Clear pending state and go back to services view
+				svc := *service
+				tsk := *task
+				m.state.ClearPendingContainer()
+				m.pendingLocalPort = 0
+				m.state.View = state.ViewServices
+				m.updateMenuBar()
+
+				return m.startTunnelWithPort(svc, tsk, container, remotePort, localPort)
+			}
+		}
 	}
 	return nil
 }
@@ -1141,6 +1235,15 @@ func (m *Model) handleBack() {
 		m.state.ClearPendingTunnel()
 		m.updateMenuBar()
 		m.updateAPIStagesList()
+	case state.ViewContainerSelect:
+		// Go back to services, clear pending container info
+		m.state.View = state.ViewServices
+		m.state.FilterText = ""
+		m.filterInput.SetValue("")
+		m.state.ClearPendingContainer()
+		m.pendingLocalPort = 0
+		m.updateMenuBar()
+		m.updateServicesList()
 	case state.ViewTunnels:
 		// Go back to previous view (stacks or services)
 		if m.state.SelectedStack != nil {
@@ -1922,18 +2025,11 @@ func (m *Model) updateComponentSizes() {
 		return
 	}
 
-	// Calculate layout
-	// Menu bar is 6 rows (5 info rows + 1 resource bar)
-	menuBarHeight := 7
-	footerHeight := 1
+	// Calculate logs height
 	logsHeight := 0
 	if m.state.ShowLogs {
 		logsHeight = min(10, m.height/4)
 	}
-
-	contentHeight := m.height - menuBarHeight - footerHeight - logsHeight
-	listWidth := m.width / 2
-	detailsWidth := m.width - listWidth
 
 	m.header.SetWidth(m.width)
 	m.header.SetProfile(m.state.Profile)
@@ -1947,9 +2043,8 @@ func (m *Model) updateComponentSizes() {
 	m.footer.SetWidth(m.width)
 	m.footer.SetBindings(components.DefaultBindings())
 
-	m.stacksList.SetSize(listWidth, contentHeight)
-	m.serviceList.SetSize(listWidth, contentHeight)
-	m.details.SetSize(detailsWidth, contentHeight)
+	// Note: List and details sizes are set in renderMainContent() before View() calls
+	// to ensure consistent sizing with the actual rendered layout
 	m.logs.SetSize(m.width, logsHeight)
 
 	m.updateMenuBar()
@@ -2254,6 +2349,40 @@ func (m *Model) updateEC2List() {
 	m.ec2List.SetEmptyMessage("No SSM-managed EC2 instances found")
 }
 
+func (m *Model) updateContainerList() {
+	containers := m.state.FilteredContainers()
+	items := make([]components.ListItem, len(containers))
+	for i, c := range containers {
+		// Format ports as string
+		ports := c.GetExposedPorts()
+		portStr := ""
+		if len(ports) > 0 {
+			portStrs := make([]string, len(ports))
+			for j, p := range ports {
+				portStrs[j] = fmt.Sprintf("%d", p)
+			}
+			portStr = "[" + strings.Join(portStrs, ", ") + "]"
+		}
+
+		// Style: sidecars get dimmed, app containers get highlighted
+		statusStyle := lipgloss.NewStyle().Foreground(theme.Success)
+		if c.IsSidecar() {
+			statusStyle = lipgloss.NewStyle().Foreground(theme.TextDim)
+		}
+
+		items[i] = components.ListItem{
+			ID:          c.Name,
+			Title:       c.Name,
+			Status:      portStr,
+			StatusStyle: statusStyle,
+			Extra:       c.LastStatus,
+		}
+	}
+	m.containerList.SetItems(items)
+	m.containerList.SetLoading(false)
+	m.containerList.SetEmptyMessage("No containers found")
+}
+
 func (m *Model) updateCurrentList() {
 	switch m.state.View {
 	case state.ViewStacks:
@@ -2270,6 +2399,8 @@ func (m *Model) updateCurrentList() {
 		m.updateAPIStagesList()
 	case state.ViewJumpHostSelect:
 		m.updateEC2List()
+	case state.ViewContainerSelect:
+		m.updateContainerList()
 	}
 }
 
@@ -2308,6 +2439,20 @@ func (m *Model) updateServiceDetails() {
 	// Find the service
 	for _, s := range m.state.Services {
 		if s.Name == item.ID {
+			// Format container ports as "container:port1,port2; ..."
+			var containerPortsStr string
+			if len(s.ContainerPorts) > 0 {
+				var parts []string
+				for _, cp := range s.ContainerPorts {
+					var portStrs []string
+					for _, p := range cp.Ports {
+						portStrs = append(portStrs, fmt.Sprintf("%d", p))
+					}
+					parts = append(parts, fmt.Sprintf("%s:%s", cp.ContainerName, strings.Join(portStrs, ",")))
+				}
+				containerPortsStr = strings.Join(parts, "; ")
+			}
+
 			rows := components.ServiceDetails(
 				s.Name,
 				s.ClusterName,
@@ -2317,6 +2462,7 @@ func (m *Model) updateServiceDetails() {
 				s.PendingCount,
 				s.TaskDefinition,
 				s.LaunchType,
+				containerPortsStr,
 				ServiceStatusStyle(s.RunningCount, s.DesiredCount),
 			)
 			m.details.SetTitle("Service Details")
@@ -2627,6 +2773,29 @@ func (m *Model) renderTooSmallScreen() string {
 
 // renderMainContent renders the main content area based on layout mode.
 func (m *Model) renderMainContent(layout layoutMode, contentHeight int) string {
+	// Calculate sizes first
+	var listWidth, detailsWidth int
+	if layout == layoutSingle {
+		listWidth = m.width
+	} else {
+		listWidth = int(float64(m.width) * listPaneRatio)
+		detailsWidth = m.width - listWidth
+	}
+
+	// Set sizes on all lists BEFORE calling View()
+	m.stacksList.SetSize(listWidth, contentHeight)
+	m.stackResourcesList.SetSize(listWidth, contentHeight)
+	m.serviceList.SetSize(listWidth, contentHeight)
+	m.lambdaList.SetSize(listWidth, contentHeight)
+	m.apiGatewayList.SetSize(listWidth, contentHeight)
+	m.apiStagesList.SetSize(listWidth, contentHeight)
+	m.ec2List.SetSize(listWidth, contentHeight)
+	m.containerList.SetSize(listWidth, contentHeight)
+	if layout != layoutSingle {
+		m.details.SetSize(detailsWidth, contentHeight)
+	}
+
+	// Now render the list view with correct size
 	var listView string
 	switch m.state.View {
 	case state.ViewStacks:
@@ -2643,6 +2812,8 @@ func (m *Model) renderMainContent(layout layoutMode, contentHeight int) string {
 		listView = m.apiStagesList.View()
 	case state.ViewJumpHostSelect:
 		listView = m.ec2List.View()
+	case state.ViewContainerSelect:
+		listView = m.containerList.View()
 	}
 
 	// Filter input (shown above list when filtering)
@@ -2661,12 +2832,6 @@ func (m *Model) renderMainContent(layout layoutMode, contentHeight int) string {
 
 	// Single pane layout - list only, full width
 	if layout == layoutSingle {
-		m.stacksList.SetSize(m.width, contentHeight)
-		m.stackResourcesList.SetSize(m.width, contentHeight)
-		m.serviceList.SetSize(m.width, contentHeight)
-		m.lambdaList.SetSize(m.width, contentHeight)
-		m.apiGatewayList.SetSize(m.width, contentHeight)
-		m.apiStagesList.SetSize(m.width, contentHeight)
 		return lipgloss.NewStyle().
 			Width(m.width).
 			Height(contentHeight).
@@ -2676,17 +2841,6 @@ func (m *Model) renderMainContent(layout layoutMode, contentHeight int) string {
 	}
 
 	// Full two-pane layout
-	listWidth := int(float64(m.width) * listPaneRatio)
-	detailsWidth := m.width - listWidth
-
-	m.stacksList.SetSize(listWidth, contentHeight)
-	m.stackResourcesList.SetSize(listWidth, contentHeight)
-	m.serviceList.SetSize(listWidth, contentHeight)
-	m.lambdaList.SetSize(listWidth, contentHeight)
-	m.apiGatewayList.SetSize(listWidth, contentHeight)
-	m.apiStagesList.SetSize(listWidth, contentHeight)
-	m.details.SetSize(detailsWidth, contentHeight)
-
 	listPane := lipgloss.NewStyle().
 		Width(listWidth).
 		Height(contentHeight).
@@ -2766,4 +2920,35 @@ func matchKey(msg tea.KeyMsg, binding key.Binding) bool {
 		}
 	}
 	return false
+}
+
+// findBestContainer finds the best container for port forwarding.
+// It prefers app containers over sidecars (otel, datadog, envoy, etc.)
+// and prefers containers with common app ports (80, 8080, etc.)
+func findBestContainer(containers []model.Container) *model.Container {
+	// First pass: find non-sidecar containers with app ports and RuntimeID
+	for i := range containers {
+		c := &containers[i]
+		if c.RuntimeID != "" && !c.IsSidecar() && c.HasAppPort() {
+			return c
+		}
+	}
+
+	// Second pass: find any non-sidecar container with RuntimeID
+	for i := range containers {
+		c := &containers[i]
+		if c.RuntimeID != "" && !c.IsSidecar() {
+			return c
+		}
+	}
+
+	// Third pass: find any container with RuntimeID (including sidecars)
+	for i := range containers {
+		c := &containers[i]
+		if c.RuntimeID != "" {
+			return c
+		}
+	}
+
+	return nil
 }
