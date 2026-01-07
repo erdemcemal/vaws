@@ -124,6 +124,21 @@ type (
 		client *aws.Client
 		err    error
 	}
+
+	// cloudWatchLogConfigsLoadedMsg is sent when log configs are loaded.
+	cloudWatchLogConfigsLoadedMsg struct {
+		configs []model.ContainerLogConfig
+		service model.Service
+		task    model.Task
+		err     error
+	}
+
+	// cloudWatchLogsLoadedMsg is sent when CloudWatch logs are loaded.
+	cloudWatchLogsLoadedMsg struct {
+		entries       []model.CloudWatchLogEntry
+		lastTimestamp int64
+		err           error
+	}
 )
 
 // Layout constants for responsive design
@@ -174,10 +189,11 @@ type Model struct {
 	apiStagesList      *components.List
 	ec2List            *components.List // For jump host selection
 	containerList      *components.List // For container selection in port forwarding
-	details            *components.Details
-	logs               *components.Logs
-	tunnelsPanel       *components.TunnelsPanel
-	profileSelector    *components.ProfileSelector
+	details              *components.Details
+	logs                 *components.Logs
+	tunnelsPanel         *components.TunnelsPanel
+	cloudWatchLogsPanel  *components.CloudWatchLogsPanel
+	profileSelector      *components.ProfileSelector
 
 	// k9s-inspired components
 	commandPalette   *components.CommandPalette
@@ -251,10 +267,11 @@ func New(client *aws.Client, logger *log.Logger, version string) *Model {
 		apiStagesList:      components.NewList("API Stages"),
 		ec2List:            components.NewList("Select Jump Host"),
 		containerList:      components.NewList("Select Container"),
-		details:            components.NewDetails(),
-		logs:               components.NewLogs(logger),
-		tunnelsPanel:       components.NewTunnelsPanel(),
-		commandPalette:     components.NewCommandPalette(),
+		details:             components.NewDetails(),
+		logs:                components.NewLogs(logger),
+		tunnelsPanel:        components.NewTunnelsPanel(),
+		cloudWatchLogsPanel: components.NewCloudWatchLogsPanel(),
+		commandPalette:      components.NewCommandPalette(),
 		actionBar:          components.NewActionBar(),
 		refreshIndicator:   components.NewRefreshIndicator(),
 		xrayTree:           components.NewXRayTree(),
@@ -309,11 +326,12 @@ func NewWithProfileSelection(profiles []string, region string, logger *log.Logge
 		apiStagesList:      components.NewList("API Stages"),
 		ec2List:            components.NewList("Select Jump Host"),
 		containerList:      components.NewList("Select Container"),
-		details:            components.NewDetails(),
-		logs:               components.NewLogs(logger),
-		tunnelsPanel:       components.NewTunnelsPanel(),
-		profileSelector:    profileSelector,
-		commandPalette:     components.NewCommandPalette(),
+		details:             components.NewDetails(),
+		logs:                components.NewLogs(logger),
+		tunnelsPanel:        components.NewTunnelsPanel(),
+		cloudWatchLogsPanel: components.NewCloudWatchLogsPanel(),
+		profileSelector:     profileSelector,
+		commandPalette:      components.NewCommandPalette(),
 		actionBar:          components.NewActionBar(),
 		refreshIndicator:   components.NewRefreshIndicator(),
 		xrayTree:           components.NewXRayTree(),
@@ -754,6 +772,66 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tunnelRefreshMsg:
 		m.updateTunnelsPanel()
 
+	case cloudWatchLogConfigsLoadedMsg:
+		if msg.err != nil {
+			m.logger.Error("Failed to load log configs: %v", msg.err)
+			m.state.ShowLogs = true
+			m.updateComponentSizes()
+			return m, nil
+		}
+
+		if len(msg.configs) == 0 {
+			m.logger.Error("No CloudWatch log configurations found. Is the service using awslogs driver?")
+			m.state.ShowLogs = true
+			m.updateComponentSizes()
+			return m, nil
+		}
+
+		m.state.CloudWatchLogConfigs = msg.configs
+		m.state.CloudWatchServiceContext = &msg.service
+		m.state.CloudWatchTaskContext = &msg.task
+		m.state.View = state.ViewCloudWatchLogs
+		m.state.CloudWatchLogsStreaming = true
+		m.state.CloudWatchLastFetchTime = 0
+
+		m.cloudWatchLogsPanel.SetContainers(msg.configs)
+		m.cloudWatchLogsPanel.SetContext(msg.service.Name, msg.task.TaskID)
+		m.cloudWatchLogsPanel.SetStreaming(true)
+		m.cloudWatchLogsPanel.Clear()
+
+		m.updateMenuBar()
+
+		// Start fetching logs
+		return m, tea.Batch(
+			m.fetchCloudWatchLogs(),
+			m.cloudWatchLogsPanel.TickCmd(),
+		)
+
+	case cloudWatchLogsLoadedMsg:
+		if msg.err != nil {
+			m.logger.Error("Failed to fetch CloudWatch logs: %v", msg.err)
+			return m, nil
+		}
+
+		m.state.CloudWatchLastFetchTime = msg.lastTimestamp
+
+		if len(m.state.CloudWatchLogs) == 0 {
+			m.state.CloudWatchLogs = msg.entries
+			m.cloudWatchLogsPanel.SetEntries(msg.entries)
+		} else {
+			m.state.CloudWatchLogs = append(m.state.CloudWatchLogs, msg.entries...)
+			m.cloudWatchLogsPanel.AppendEntries(msg.entries)
+		}
+
+	case components.CloudWatchLogsTickMsg:
+		// Continue polling if still in CloudWatch logs view and streaming
+		if m.state.View == state.ViewCloudWatchLogs && m.state.CloudWatchLogsStreaming {
+			return m, tea.Batch(
+				m.fetchCloudWatchLogs(),
+				m.cloudWatchLogsPanel.TickCmd(),
+			)
+		}
+
 	default:
 		// Pass other messages to filter input if filtering
 		if m.filtering {
@@ -819,6 +897,9 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 		m.state.ToggleLogs()
 		m.updateComponentSizes()
 
+	case matchKey(msg, m.keys.CloudWatchLogs):
+		return m.handleCloudWatchLogs()
+
 	case matchKey(msg, m.keys.PortForward):
 		return m.handlePortForward()
 
@@ -874,6 +955,26 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 		// Scroll logs to newest
 		if m.state.ShowLogs {
 			m.logs.ScrollToBottom()
+		}
+
+	case msg.String() == "tab":
+		// Switch to next container in CloudWatch logs view
+		if m.state.View == state.ViewCloudWatchLogs {
+			m.cloudWatchLogsPanel.SelectNextTab()
+			m.state.CloudWatchLastFetchTime = 0
+			m.state.CloudWatchLogs = nil
+			m.cloudWatchLogsPanel.Clear()
+			return m.fetchCloudWatchLogs()
+		}
+
+	case msg.String() == "shift+tab":
+		// Switch to previous container in CloudWatch logs view
+		if m.state.View == state.ViewCloudWatchLogs {
+			m.cloudWatchLogsPanel.SelectPrevTab()
+			m.state.CloudWatchLastFetchTime = 0
+			m.state.CloudWatchLogs = nil
+			m.cloudWatchLogsPanel.Clear()
+			return m.fetchCloudWatchLogs()
 		}
 	}
 
@@ -1244,6 +1345,15 @@ func (m *Model) handleBack() {
 		m.pendingLocalPort = 0
 		m.updateMenuBar()
 		m.updateServicesList()
+	case state.ViewCloudWatchLogs:
+		// Go back to services, stop streaming
+		m.state.View = state.ViewServices
+		m.state.CloudWatchLogsStreaming = false
+		m.state.ClearCloudWatchLogs()
+		m.cloudWatchLogsPanel.SetStreaming(false)
+		m.cloudWatchLogsPanel.Clear()
+		m.updateMenuBar()
+		m.updateServicesList()
 	case state.ViewTunnels:
 		// Go back to previous view (stacks or services)
 		if m.state.SelectedStack != nil {
@@ -1273,6 +1383,94 @@ func (m *Model) handleRefresh() tea.Cmd {
 		m.updateTunnelsPanel()
 	}
 	return nil
+}
+
+func (m *Model) handleCloudWatchLogs() tea.Cmd {
+	// Only works in Services view
+	if m.state.View != state.ViewServices {
+		m.logger.Debug("CloudWatch logs: only available in services view")
+		return nil
+	}
+
+	item := m.serviceList.SelectedItem()
+	if item == nil {
+		m.logger.Warn("CloudWatch logs: no service selected")
+		return nil
+	}
+
+	// Find the service
+	var selectedService *model.Service
+	for i := range m.state.Services {
+		if m.state.Services[i].Name == item.ID {
+			selectedService = &m.state.Services[i]
+			break
+		}
+	}
+
+	if selectedService == nil {
+		return nil
+	}
+
+	if selectedService.ClusterARN == "" {
+		m.logger.Error("CloudWatch logs: service has no cluster ARN")
+		return nil
+	}
+
+	m.logger.Info("Loading CloudWatch logs for service: %s", selectedService.Name)
+
+	// First, fetch tasks to get task ID
+	service := *selectedService
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		tasks, err := m.client.ListTasksForService(ctx, service.ClusterARN, service.Name)
+		if err != nil || len(tasks) == 0 {
+			errMsg := "no running tasks found"
+			if err != nil {
+				errMsg = err.Error()
+			}
+			return cloudWatchLogConfigsLoadedMsg{err: fmt.Errorf("failed to get tasks: %s", errMsg)}
+		}
+
+		task := tasks[0] // Use first running task
+
+		configs, err := m.client.GetContainerLogConfigs(ctx, task.TaskDefinitionARN, task.TaskID)
+		return cloudWatchLogConfigsLoadedMsg{
+			configs: configs,
+			service: service,
+			task:    task,
+			err:     err,
+		}
+	}
+}
+
+func (m *Model) fetchCloudWatchLogs() tea.Cmd {
+	config := m.cloudWatchLogsPanel.SelectedContainer()
+	if config == nil {
+		return nil
+	}
+
+	startTime := m.state.CloudWatchLastFetchTime
+
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		entries, lastTimestamp, err := m.client.FetchLogs(
+			ctx,
+			config.LogGroup,
+			config.LogStreamName,
+			startTime,
+			100, // Limit per fetch
+		)
+
+		return cloudWatchLogsLoadedMsg{
+			entries:       entries,
+			lastTimestamp: lastTimestamp,
+			err:           err,
+		}
+	}
 }
 
 func (m *Model) handlePortForward() tea.Cmd {
@@ -2773,6 +2971,17 @@ func (m *Model) renderTooSmallScreen() string {
 
 // renderMainContent renders the main content area based on layout mode.
 func (m *Model) renderMainContent(layout layoutMode, contentHeight int) string {
+	// CloudWatch logs view takes full screen
+	if m.state.View == state.ViewCloudWatchLogs {
+		m.cloudWatchLogsPanel.SetSize(m.width, contentHeight)
+		return lipgloss.NewStyle().
+			Width(m.width).
+			Height(contentHeight).
+			MaxWidth(m.width).
+			MaxHeight(contentHeight).
+			Render(m.cloudWatchLogsPanel.View())
+	}
+
 	// Calculate sizes first
 	var listWidth, detailsWidth int
 	if layout == layoutSingle {

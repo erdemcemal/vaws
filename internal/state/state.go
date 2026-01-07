@@ -23,6 +23,7 @@ const (
 	ViewAPIRoutes
 	ViewJumpHostSelect    // Select jump host for private API Gateway tunnel
 	ViewContainerSelect   // Select container for port forwarding
+	ViewCloudWatchLogs    // CloudWatch logs streaming view
 )
 
 // State holds all application state.
@@ -98,6 +99,17 @@ type State struct {
 	PendingContainerService *model.Service
 	PendingContainerTask    *model.Task
 	PendingContainers       []model.Container
+
+	// CloudWatch Logs state
+	CloudWatchLogs              []model.CloudWatchLogEntry
+	CloudWatchLogsLoading       bool
+	CloudWatchLogsError         error
+	CloudWatchLogsStreaming     bool
+	CloudWatchLastFetchTime     int64 // Unix ms for incremental fetch
+	CloudWatchLogConfigs        []model.ContainerLogConfig
+	CloudWatchSelectedContainer int
+	CloudWatchServiceContext    *model.Service
+	CloudWatchTaskContext       *model.Task
 
 	// UI state
 	ShowLogs      bool
@@ -262,6 +274,19 @@ func (s *State) ClearPendingContainer() {
 	s.PendingContainerService = nil
 	s.PendingContainerTask = nil
 	s.PendingContainers = nil
+}
+
+// ClearCloudWatchLogs clears CloudWatch logs state.
+func (s *State) ClearCloudWatchLogs() {
+	s.CloudWatchLogs = nil
+	s.CloudWatchLogsLoading = false
+	s.CloudWatchLogsError = nil
+	s.CloudWatchLogsStreaming = false
+	s.CloudWatchLastFetchTime = 0
+	s.CloudWatchLogConfigs = nil
+	s.CloudWatchSelectedContainer = 0
+	s.CloudWatchServiceContext = nil
+	s.CloudWatchTaskContext = nil
 }
 
 // SelectStack sets the selected stack and changes view to services.

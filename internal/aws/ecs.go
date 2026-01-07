@@ -379,6 +379,57 @@ func (c *Client) getContainerPortsFromTaskDef(ctx context.Context, taskDefARN st
 	return containerPorts
 }
 
+// GetContainerLogConfigs extracts CloudWatch log configurations from a task definition.
+// Returns log configs for containers using the awslogs driver.
+func (c *Client) GetContainerLogConfigs(ctx context.Context, taskDefARN, taskID string) ([]model.ContainerLogConfig, error) {
+	containerDefs := c.getContainerDefinitions(ctx, taskDefARN)
+	if containerDefs == nil {
+		return nil, fmt.Errorf("no container definitions found for task definition: %s", taskDefARN)
+	}
+
+	var configs []model.ContainerLogConfig
+
+	for _, cd := range containerDefs {
+		if cd.LogConfiguration == nil {
+			continue
+		}
+
+		// Only support awslogs driver
+		if cd.LogConfiguration.LogDriver != ecstypes.LogDriverAwslogs {
+			continue
+		}
+
+		opts := cd.LogConfiguration.Options
+		if opts == nil {
+			continue
+		}
+
+		logGroup := opts["awslogs-group"]
+		logStreamPrefix := opts["awslogs-stream-prefix"]
+		logRegion := opts["awslogs-region"]
+
+		if logGroup == "" || logStreamPrefix == "" {
+			continue
+		}
+
+		containerName := aws.ToString(cd.Name)
+
+		configs = append(configs, model.ContainerLogConfig{
+			ContainerName:   containerName,
+			LogGroup:        logGroup,
+			LogStreamPrefix: logStreamPrefix,
+			LogRegion:       logRegion,
+			LogStreamName:   BuildLogStreamName(logStreamPrefix, containerName, taskID),
+		})
+	}
+
+	if len(configs) == 0 {
+		return nil, fmt.Errorf("no containers with awslogs driver found")
+	}
+
+	return configs, nil
+}
+
 // GetSSMTarget returns the SSM target string for port forwarding to a Fargate task.
 // Format: ecs:<cluster-name>_<task-id>_<runtime-id>
 func GetSSMTarget(clusterName, taskID, runtimeID string) string {

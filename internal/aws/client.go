@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/apigateway"
 	"github.com/aws/aws-sdk-go-v2/service/apigatewayv2"
 	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
@@ -31,6 +32,7 @@ type Client struct {
 	apigwv2 *apigatewayv2.Client
 	ec2     *ec2.Client
 	ssm     *ssm.Client
+	cwlogs  *cloudwatchlogs.Client
 }
 
 // NewClient creates a new AWS client using the specified profile.
@@ -67,6 +69,7 @@ func NewClient(ctx context.Context, profile, region string) (*Client, error) {
 		apigwv2: apigatewayv2.NewFromConfig(cfg),
 		ec2:     ec2.NewFromConfig(cfg),
 		ssm:     ssm.NewFromConfig(cfg),
+		cwlogs:  cloudwatchlogs.NewFromConfig(cfg),
 	}, nil
 }
 
@@ -113,6 +116,11 @@ func (c *Client) EC2() *ec2.Client {
 // SSM returns the SSM client.
 func (c *Client) SSM() *ssm.Client {
 	return c.ssm
+}
+
+// CloudWatchLogs returns the CloudWatch Logs client.
+func (c *Client) CloudWatchLogs() *cloudwatchlogs.Client {
+	return c.cwlogs
 }
 
 // Config returns the underlying AWS config.

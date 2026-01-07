@@ -15,16 +15,17 @@ type KeyMap struct {
 	Bottom key.Binding
 
 	// Actions
-	Refresh       key.Binding
-	Filter        key.Binding
-	Logs          key.Binding
-	Help          key.Binding
-	Quit          key.Binding
-	PortForward   key.Binding
-	Tunnels       key.Binding
-	StopTunnel    key.Binding
-	RestartTunnel key.Binding
-	ClearTunnels  key.Binding
+	Refresh        key.Binding
+	Filter         key.Binding
+	Logs           key.Binding
+	CloudWatchLogs key.Binding
+	Help           key.Binding
+	Quit           key.Binding
+	PortForward    key.Binding
+	Tunnels        key.Binding
+	StopTunnel     key.Binding
+	RestartTunnel  key.Binding
+	ClearTunnels   key.Binding
 
 	// Log scrolling
 	LogScrollUp   key.Binding
@@ -82,6 +83,10 @@ func DefaultKeyMap() KeyMap {
 		Logs: key.NewBinding(
 			key.WithKeys("l"),
 			key.WithHelp("l", "logs"),
+		),
+		CloudWatchLogs: key.NewBinding(
+			key.WithKeys("L"),
+			key.WithHelp("L", "cloudwatch logs"),
 		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),

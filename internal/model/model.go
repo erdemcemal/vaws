@@ -427,3 +427,20 @@ type APIGatewayTunnel struct {
 	StartedAt   time.Time
 	Error       string
 }
+
+// CloudWatchLogEntry represents a single CloudWatch log event.
+type CloudWatchLogEntry struct {
+	Timestamp     time.Time
+	Message       string
+	IngestionTime time.Time
+	LogStreamName string
+}
+
+// ContainerLogConfig holds CloudWatch log configuration for a container.
+type ContainerLogConfig struct {
+	ContainerName   string
+	LogGroup        string
+	LogStreamPrefix string
+	LogRegion       string // May differ from current region
+	LogStreamName   string // Computed: prefix/container/task-id
+}

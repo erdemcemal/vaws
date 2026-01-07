@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/apigateway v1.38.3
 	github.com/aws/aws-sdk-go-v2/service/apigatewayv2 v1.33.4
 	github.com/aws/aws-sdk-go-v2/service/cloudformation v1.71.4
+	github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.63.0
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.279.0
 	github.com/aws/aws-sdk-go-v2/service/ecs v1.70.0
 	github.com/aws/aws-sdk-go-v2/service/lambda v1.87.0
