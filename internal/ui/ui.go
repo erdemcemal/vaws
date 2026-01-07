@@ -213,7 +213,7 @@ type Model struct {
 }
 
 // New creates a new Model.
-func New(client *aws.Client, logger *log.Logger) *Model {
+func New(client *aws.Client, logger *log.Logger, version string) *Model {
 	ti := textinput.New()
 	ti.Placeholder = "Type to filter..."
 	ti.CharLimit = 64
@@ -226,6 +226,9 @@ func New(client *aws.Client, logger *log.Logger) *Model {
 	// Load configuration
 	cfg, _ := config.Load()
 
+	menuBar := components.NewMenuBarWithCrumbs()
+	menuBar.SetVersion(version)
+
 	m := &Model{
 		client:             client,
 		logger:             logger,
@@ -233,9 +236,9 @@ func New(client *aws.Client, logger *log.Logger) *Model {
 		apiGWManager:       tunnel.NewAPIGatewayManager(client.Profile(), client.Region()),
 		cfg:                cfg,
 		state:              state.New(),
-		splash:             components.NewSplash("v0.4.2"),
+		splash:             components.NewSplash(version),
 		header:             components.NewHeader(),
-		menuBar:            components.NewMenuBarWithCrumbs(),
+		menuBar:            menuBar,
 		footer:             components.NewFooter(),
 		stacksList:         components.NewList("CloudFormation Stacks"),
 		stackResourcesList: components.NewList("Stack Resources"),
@@ -264,7 +267,7 @@ func New(client *aws.Client, logger *log.Logger) *Model {
 }
 
 // NewWithProfileSelection creates a new Model that shows profile selection first.
-func NewWithProfileSelection(profiles []string, region string, logger *log.Logger) *Model {
+func NewWithProfileSelection(profiles []string, region string, logger *log.Logger, version string) *Model {
 	ti := textinput.New()
 	ti.Placeholder = "Type to filter..."
 	ti.CharLimit = 64
@@ -280,6 +283,9 @@ func NewWithProfileSelection(profiles []string, region string, logger *log.Logge
 	// Load configuration
 	cfg, _ := config.Load()
 
+	menuBar := components.NewMenuBarWithCrumbs()
+	menuBar.SetVersion(version)
+
 	m := &Model{
 		client:             nil, // Will be created after profile selection
 		logger:             logger,
@@ -287,9 +293,9 @@ func NewWithProfileSelection(profiles []string, region string, logger *log.Logge
 		apiGWManager:       nil, // Will be created after profile selection
 		cfg:                cfg,
 		state:              state.New(),
-		splash:             components.NewSplash("v0.4.2"),
+		splash:             components.NewSplash(version),
 		header:             components.NewHeader(),
-		menuBar:            components.NewMenuBarWithCrumbs(),
+		menuBar:            menuBar,
 		footer:             components.NewFooter(),
 		stacksList:         components.NewList("CloudFormation Stacks"),
 		stackResourcesList: components.NewList("Stack Resources"),

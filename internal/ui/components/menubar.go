@@ -65,7 +65,7 @@ func NewMenuBar() *MenuBar {
 	return &MenuBar{
 		resource:         ResourceStacks,
 		refreshIndicator: NewRefreshIndicator(),
-		version:          "v0.4.2",
+		version:          "dev",
 		height:           6, // Default height for multi-row layout
 		regionShortcuts:  DefaultRegionShortcuts(),
 		keyBindings: []KeyBinding{

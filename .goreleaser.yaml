@@ -49,7 +49,7 @@ brews:
     repository:
       owner: erdemcemal
       name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+      token: "{{ .Env.GITHUB_TOKEN }}"
 
     directory: Formula
     homepage: "https://github.com/erdemcemal/vaws"

@@ -47,7 +47,7 @@ func Run(cfg Config) error {
 		cfg.Profiles = profiles
 
 		// Create TUI model without AWS client (will be created after profile selection)
-		model := ui.NewWithProfileSelection(cfg.Profiles, cfg.Region, log.Default())
+		model := ui.NewWithProfileSelection(cfg.Profiles, cfg.Region, log.Default(), "v"+Version)
 
 		// Create and run the program
 		opts := []tea.ProgramOption{
@@ -72,7 +72,7 @@ func Run(cfg Config) error {
 	}
 
 	// Create TUI model
-	model := ui.New(client, log.Default())
+	model := ui.New(client, log.Default(), "v"+Version)
 
 	// Create and run the program
 	opts := []tea.ProgramOption{
