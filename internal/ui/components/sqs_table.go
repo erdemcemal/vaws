@@ -157,20 +157,19 @@ func (t *SQSTable) renderTable() string {
 	// Fixed column widths - compact
 	msgWidth := 10
 	flightWidth := 12
-	dlqWidth := 8
 
 	// NAME gets remaining space but with reasonable limit
-	availableForName := t.width - msgWidth - flightWidth - dlqWidth - 10
+	availableForName := t.width - msgWidth - flightWidth - 8
 	nameWidth := availableForName
-	if nameWidth > 60 {
-		nameWidth = 60 // Cap name width to avoid too much empty space
+	if nameWidth > 80 {
+		nameWidth = 80
 	}
 	if nameWidth < 20 {
 		nameWidth = 20
 	}
 
 	// Total used width
-	totalWidth := nameWidth + msgWidth + flightWidth + dlqWidth + 6
+	totalWidth := nameWidth + msgWidth + flightWidth + 4
 
 	// Styles
 	headerStyle := lipgloss.NewStyle().
@@ -179,14 +178,12 @@ func (t *SQSTable) renderTable() string {
 
 	dimStyle := lipgloss.NewStyle().Foreground(theme.TextDim)
 	selectedStyle := lipgloss.NewStyle().Foreground(theme.Primary).Bold(true)
-	warningStyle := lipgloss.NewStyle().Foreground(theme.Warning).Bold(true)
 
 	// Header
-	header := fmt.Sprintf("  %-*s  %*s  %*s  %*s",
+	header := fmt.Sprintf("  %-*s  %*s  %*s",
 		nameWidth, "NAME",
 		msgWidth, "MESSAGES",
 		flightWidth, "IN FLIGHT",
-		dlqWidth, "DLQ",
 	)
 	b.WriteString(headerStyle.Render(header))
 	b.WriteString("\n")
@@ -227,30 +224,17 @@ func (t *SQSTable) renderTable() string {
 			name = name[:nameWidth-3] + "..."
 		}
 
-		// DLQ display
-		dlqStr := "-"
-		if q.HasDLQ {
-			if q.DLQMessageCount > 0 {
-				dlqStr = fmt.Sprintf("%d", q.DLQMessageCount)
-			} else {
-				dlqStr = "0"
-			}
-		}
-
 		// Build row with consistent spacing
-		row := fmt.Sprintf("%s%-*s  %*d  %*d  %*s",
+		row := fmt.Sprintf("%s%-*s  %*d  %*d",
 			cursor,
 			nameWidth, name,
 			msgWidth, q.ApproximateMessageCount,
 			flightWidth, q.ApproximateInFlight,
-			dlqWidth, dlqStr,
 		)
 
 		// Apply style
 		if isSelected {
 			b.WriteString(selectedStyle.Render(row))
-		} else if q.HasDLQ && q.DLQMessageCount > 0 {
-			b.WriteString(warningStyle.Render(row))
 		} else {
 			b.WriteString(row)
 		}

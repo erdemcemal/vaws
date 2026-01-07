@@ -2882,12 +2882,12 @@ func (m *Model) updateQueueDetails() {
 	// Add DLQ info if present
 	if q.HasDLQ {
 		rows = append(rows, components.DetailRow{Label: "", Value: ""}) // Spacer
-		rows = append(rows, components.DetailRow{Label: "DLQ", Value: q.DLQName})
-		dlqMsg := "0"
-		if q.DLQMessageCount > 0 {
-			dlqMsg = fmt.Sprintf("%d (warning!)", q.DLQMessageCount)
+		// Extract DLQ name from ARN (format: arn:aws:sqs:region:account:queue-name)
+		dlqName := q.DLQArn
+		if parts := strings.Split(q.DLQArn, ":"); len(parts) > 0 {
+			dlqName = parts[len(parts)-1]
 		}
-		rows = append(rows, components.DetailRow{Label: "DLQ Messages", Value: dlqMsg})
+		rows = append(rows, components.DetailRow{Label: "DLQ", Value: dlqName})
 		rows = append(rows, components.DetailRow{Label: "Max Receives", Value: fmt.Sprintf("%d", q.MaxReceiveCount)})
 	}
 
@@ -3323,12 +3323,7 @@ func (m *Model) renderMainContent(layout layoutMode, contentHeight int) string {
 	if layout == layoutSingle {
 		listWidth = m.width
 	} else {
-		// SQS view uses 60% for list, 40% for details
-		if m.state.View == state.ViewSQS {
-			listWidth = int(float64(m.width) * 0.60)
-		} else {
-			listWidth = int(float64(m.width) * listPaneRatio)
-		}
+		listWidth = int(float64(m.width) * listPaneRatio)
 		detailsWidth = m.width - listWidth
 	}
 

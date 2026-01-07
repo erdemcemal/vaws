@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,7 +80,6 @@ func (c *Client) ListQueues(ctx context.Context) ([]model.Queue, error) {
 
 	// Collect results
 	queues := make([]model.Queue, len(queueURLs))
-	dlqURLMap := make(map[string]string) // ARN -> URL mapping for DLQs
 	validCount := 0
 
 	for result := range results {
@@ -89,11 +89,6 @@ func (c *Client) ListQueues(ctx context.Context) ([]model.Queue, error) {
 		}
 		queues[result.index] = *result.queue
 		validCount++
-
-		// Build ARN -> URL map for DLQ lookups
-		if result.queue.ARN != "" {
-			dlqURLMap[result.queue.ARN] = result.queue.URL
-		}
 	}
 
 	// Filter out empty entries (failed fetches)
@@ -104,74 +99,13 @@ func (c *Client) ListQueues(ctx context.Context) ([]model.Queue, error) {
 		}
 	}
 
-	// Fetch DLQ message counts in parallel
-	c.enrichQueuesWithDLQCounts(ctx, validQueues, dlqURLMap)
+	// Sort queues alphabetically by name
+	sort.Slice(validQueues, func(i, j int) bool {
+		return strings.ToLower(validQueues[i].Name) < strings.ToLower(validQueues[j].Name)
+	})
 
 	log.Info("Found %d SQS queues", len(validQueues))
 	return validQueues, nil
-}
-
-// enrichQueuesWithDLQCounts fetches DLQ message counts in parallel.
-func (c *Client) enrichQueuesWithDLQCounts(ctx context.Context, queues []model.Queue, dlqURLMap map[string]string) {
-	type dlqResult struct {
-		index    int
-		count    int
-		dlqURL   string
-		dlqName  string
-		err      error
-	}
-
-	// Count how many queues have DLQs
-	var dlqIndices []int
-	for i := range queues {
-		if queues[i].HasDLQ && queues[i].DLQArn != "" {
-			if _, ok := dlqURLMap[queues[i].DLQArn]; ok {
-				dlqIndices = append(dlqIndices, i)
-			}
-		}
-	}
-
-	if len(dlqIndices) == 0 {
-		return
-	}
-
-	results := make(chan dlqResult, len(dlqIndices))
-	sem := make(chan struct{}, maxConcurrentSQSCalls)
-
-	var wg sync.WaitGroup
-	for _, idx := range dlqIndices {
-		wg.Add(1)
-		go func(queueIdx int) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			dlqURL := dlqURLMap[queues[queueIdx].DLQArn]
-			count, err := c.getQueueMessageCount(ctx, dlqURL)
-			results <- dlqResult{
-				index:   queueIdx,
-				count:   count,
-				dlqURL:  dlqURL,
-				dlqName: extractQueueNameFromURL(dlqURL),
-				err:     err,
-			}
-		}(idx)
-	}
-
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-
-	for result := range results {
-		if result.err != nil {
-			log.Warn("Failed to get DLQ message count: %v", result.err)
-			continue
-		}
-		queues[result.index].DLQMessageCount = result.count
-		queues[result.index].DLQURL = result.dlqURL
-		queues[result.index].DLQName = result.dlqName
-	}
 }
 
 // GetQueueAttributes returns detailed information about a specific queue.
@@ -209,23 +143,6 @@ func (c *Client) GetQueuesFromStack(ctx context.Context, stackName string) ([]st
 
 	log.Debug("Found %d SQS queues in stack %s", len(queueURLs), stackName)
 	return queueURLs, nil
-}
-
-// getQueueMessageCount returns the approximate message count for a queue.
-func (c *Client) getQueueMessageCount(ctx context.Context, queueURL string) (int, error) {
-	out, err := c.sqs.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
-		QueueUrl: aws.String(queueURL),
-		AttributeNames: []sqstypes.QueueAttributeName{
-			sqstypes.QueueAttributeNameApproximateNumberOfMessages,
-		},
-	})
-	if err != nil {
-		return 0, err
-	}
-
-	countStr := out.Attributes[string(sqstypes.QueueAttributeNameApproximateNumberOfMessages)]
-	count, _ := strconv.Atoi(countStr)
-	return count, nil
 }
 
 // convertQueueAttributes converts AWS SQS attributes to our model.
