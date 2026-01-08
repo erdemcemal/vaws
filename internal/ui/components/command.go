@@ -26,6 +26,7 @@ var AvailableCommands = []Command{
 	{Name: "sqs", Aliases: []string{"queues", "queue", "3"}, Description: "SQS queues [3]"},
 	{Name: "apigateway", Aliases: []string{"apigw", "api", "gw", "4"}, Description: "API Gateway [4]"},
 	{Name: "stacks", Aliases: []string{"st", "stack", "cfn", "5"}, Description: "CloudFormation stacks [5]"},
+	{Name: "dynamodb", Aliases: []string{"ddb", "tables", "dynamo", "6"}, Description: "DynamoDB tables [6]"},
 
 	// Other views
 	{Name: "tunnels", Aliases: []string{"tun", "tunnel", "pf"}, Description: "Port forward tunnels"},

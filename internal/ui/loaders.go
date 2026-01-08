@@ -430,3 +430,83 @@ func (m *Model) loadClusters() tea.Cmd {
 		},
 	)
 }
+
+// loadTables loads DynamoDB tables.
+func (m *Model) loadTables() tea.Cmd {
+	m.state.TablesLoading = true
+	m.dynamodbTable.SetLoading(true)
+	m.logger.Info("Loading DynamoDB tables...")
+
+	return tea.Batch(
+		m.dynamodbTable.Spinner().TickCmd(),
+		func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			tables, err := m.client.ListTables(ctx)
+			return tablesLoadedMsg{tables: tables, err: err}
+		},
+	)
+}
+
+// executeDynamoDBQuery executes a DynamoDB query.
+func (m *Model) executeDynamoDBQuery(params *model.QueryParams) tea.Cmd {
+	m.state.DynamoDBQueryLoading = true
+	m.state.DynamoDBQueryParams = params
+	m.state.DynamoDBIsQuery = true
+	m.dynamodbQueryResults.SetLoading(true)
+	m.logger.Info("Executing DynamoDB query on table: %s", params.TableName)
+
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		result, err := m.client.QueryTable(ctx, *params, m.state.DynamoDBLastKey)
+		return dynamoDBQueryResultMsg{result: result, err: err}
+	}
+}
+
+// executeDynamoDBScan executes a DynamoDB scan.
+func (m *Model) executeDynamoDBScan(params *model.ScanParams) tea.Cmd {
+	m.state.DynamoDBQueryLoading = true
+	m.state.DynamoDBScanParams = params
+	m.state.DynamoDBIsQuery = false
+	m.dynamodbQueryResults.SetLoading(true)
+	m.logger.Info("Executing DynamoDB scan on table: %s", params.TableName)
+
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		result, err := m.client.ScanTable(ctx, *params, m.state.DynamoDBLastKey)
+		return dynamoDBQueryResultMsg{result: result, err: err}
+	}
+}
+
+// loadNextDynamoDBPage loads the next page of DynamoDB results.
+func (m *Model) loadNextDynamoDBPage() tea.Cmd {
+	if m.state.DynamoDBQueryResult == nil || !m.state.DynamoDBQueryResult.HasMorePages {
+		return nil
+	}
+
+	m.state.DynamoDBLastKey = m.state.DynamoDBQueryResult.LastEvaluatedKey
+	m.state.DynamoDBQueryLoading = true
+	m.dynamodbQueryResults.SetLoading(true)
+
+	if m.state.DynamoDBIsQuery && m.state.DynamoDBQueryParams != nil {
+		m.logger.Info("Loading next page of query results...")
+		return func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			result, err := m.client.QueryTable(ctx, *m.state.DynamoDBQueryParams, m.state.DynamoDBLastKey)
+			return dynamoDBQueryResultMsg{result: result, err: err}
+		}
+	} else if m.state.DynamoDBScanParams != nil {
+		m.logger.Info("Loading next page of scan results...")
+		return func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			result, err := m.client.ScanTable(ctx, *m.state.DynamoDBScanParams, m.state.DynamoDBLastKey)
+			return dynamoDBQueryResultMsg{result: result, err: err}
+		}
+	}
+
+	return nil
+}

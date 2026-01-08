@@ -35,6 +35,9 @@ func (m *Model) executeCommand(result *components.CommandResult) tea.Cmd {
 	case "stacks":
 		return m.switchToStacks()
 
+	case "dynamodb", "ddb", "tables":
+		return m.switchToDynamoDB()
+
 	// Other views
 	case "tunnels":
 		m.showTunnelsView()

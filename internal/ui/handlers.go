@@ -30,10 +30,26 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 		return m.handlePayloadInputKey(msg)
 	}
 
+	// Handle DynamoDB query dialog
+	if m.dynamodbQueryDialog.IsActive() {
+		return m.handleDynamoDBQueryDialogKey(msg)
+	}
+
+	// Handle DynamoDB query results navigation
+	if m.state.View == state.ViewDynamoDBQuery {
+		return m.handleDynamoDBQueryResultsKey(msg)
+	}
+
 	switch {
 	case matchKey(msg, m.keys.Quit):
 		m.tunnelManager.StopAllTunnels()
 		return tea.Quit
+
+	case msg.String() == "q":
+		// Query DynamoDB table
+		if m.state.View == state.ViewDynamoDB {
+			return m.handleDynamoDBQuery()
+		}
 
 	case matchKey(msg, m.keys.Up):
 		m.moveCursorUp()
@@ -70,6 +86,12 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 
 	case matchKey(msg, m.keys.LambdaInvoke):
 		return m.handleLambdaInvoke()
+
+	case msg.String() == "s":
+		// Scan DynamoDB table
+		if m.state.View == state.ViewDynamoDB {
+			return m.handleDynamoDBScan()
+		}
 
 	case matchKey(msg, m.keys.Tunnels):
 		m.showTunnelsView()
@@ -166,6 +188,8 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 		return m.switchToAPIGateway()
 	case msg.String() == "5":
 		return m.switchToStacks()
+	case msg.String() == "6":
+		return m.switchToDynamoDB()
 	}
 
 	return nil
@@ -494,6 +518,12 @@ func (m *Model) handleBack() {
 			m.state.View = state.ViewMain
 			m.updateMainMenuList()
 		}
+	case state.ViewDynamoDB:
+		m.state.FilterText = ""
+		m.filterInput.SetValue("")
+		// Going back to main menu - keep tables cached
+		m.state.View = state.ViewMain
+		m.updateMainMenuList()
 	case state.ViewAPIStages:
 		m.state.GoBack()
 		m.state.FilterText = ""
@@ -557,6 +587,8 @@ func (m *Model) handleRefresh() tea.Cmd {
 		m.updateTunnelsPanel()
 	case state.ViewSQS:
 		return m.loadQueues()
+	case state.ViewDynamoDB:
+		return m.loadTables()
 	}
 	return nil
 }
@@ -1029,4 +1061,181 @@ func (m *Model) handleAPIGatewayPortForward() tea.Cmd {
 	m.portInput.Focus()
 
 	return textinput.Blink
+}
+
+// handleDynamoDBQuery opens the query dialog for the selected table.
+func (m *Model) handleDynamoDBQuery() tea.Cmd {
+	if m.state.View != state.ViewDynamoDB {
+		return nil
+	}
+
+	table := m.dynamodbTable.SelectedTable()
+	if table == nil {
+		m.logger.Warn("Query: no table selected")
+		return nil
+	}
+
+	m.state.SelectTable(table)
+	m.logger.Info("Opening query dialog for table: %s", table.Name)
+
+	// Set size for dialog
+	m.dynamodbQueryDialog.SetSize(m.width, m.height)
+
+	return m.dynamodbQueryDialog.Activate(table.Name, table.PartitionKey(), table.SortKey(), true)
+}
+
+// handleDynamoDBScan opens the scan dialog for the selected table.
+func (m *Model) handleDynamoDBScan() tea.Cmd {
+	if m.state.View != state.ViewDynamoDB {
+		return nil
+	}
+
+	table := m.dynamodbTable.SelectedTable()
+	if table == nil {
+		m.logger.Warn("Scan: no table selected")
+		return nil
+	}
+
+	m.state.SelectTable(table)
+	m.logger.Info("Opening scan dialog for table: %s", table.Name)
+
+	// Set size for dialog
+	m.dynamodbQueryDialog.SetSize(m.width, m.height)
+
+	return m.dynamodbQueryDialog.Activate(table.Name, table.PartitionKey(), table.SortKey(), false)
+}
+
+// handleDynamoDBQueryDialogKey handles key presses when the query dialog is active.
+func (m *Model) handleDynamoDBQueryDialogKey(msg tea.KeyMsg) tea.Cmd {
+	result, cmd := m.dynamodbQueryDialog.Update(msg)
+	if result != nil {
+		if result.Cancelled {
+			m.logger.Debug("Query dialog cancelled")
+			return nil
+		}
+
+		// Execute the query or scan
+		if result.QueryParams != nil {
+			m.state.DynamoDBQueryParams = result.QueryParams
+			m.state.DynamoDBScanParams = nil
+			m.state.DynamoDBIsQuery = true
+			m.state.DynamoDBQueryLoading = true
+			m.state.DynamoDBLastKey = nil
+			m.state.View = state.ViewDynamoDBQuery
+			m.dynamodbQueryResults.SetLoading(true)
+			m.dynamodbQueryResults.Clear()
+			m.logger.Info("Executing query on table: %s (PK: %s)", result.QueryParams.TableName, result.QueryParams.PartitionKeyVal)
+			return m.executeDynamoDBQuery(result.QueryParams)
+		} else if result.ScanParams != nil {
+			m.state.DynamoDBQueryParams = nil
+			m.state.DynamoDBScanParams = result.ScanParams
+			m.state.DynamoDBIsQuery = false
+			m.state.DynamoDBQueryLoading = true
+			m.state.DynamoDBLastKey = nil
+			m.state.View = state.ViewDynamoDBQuery
+			m.dynamodbQueryResults.SetLoading(true)
+			m.dynamodbQueryResults.Clear()
+			m.logger.Info("Executing scan on table: %s", result.ScanParams.TableName)
+			return m.executeDynamoDBScan(result.ScanParams)
+		}
+	}
+	return cmd
+}
+
+// handleDynamoDBQueryResultsKey handles key presses in the query results view.
+func (m *Model) handleDynamoDBQueryResultsKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "ctrl+c":
+		m.tunnelManager.StopAllTunnels()
+		return tea.Quit
+
+	case "q":
+		// Start a new query on the same table
+		if m.state.SelectedTable != nil {
+			m.dynamodbQueryDialog.SetSize(m.width, m.height)
+			return m.dynamodbQueryDialog.Activate(
+				m.state.SelectedTable.Name,
+				m.state.SelectedTable.PartitionKey(),
+				m.state.SelectedTable.SortKey(),
+				true, // isQuery
+			)
+		}
+		return nil
+
+	case "s":
+		// Start a new scan on the same table
+		if m.state.SelectedTable != nil {
+			m.dynamodbQueryDialog.SetSize(m.width, m.height)
+			return m.dynamodbQueryDialog.Activate(
+				m.state.SelectedTable.Name,
+				m.state.SelectedTable.PartitionKey(),
+				m.state.SelectedTable.SortKey(),
+				false, // isScan
+			)
+		}
+		return nil
+
+	case "esc", "backspace":
+		// Go back to table list
+		m.state.View = state.ViewDynamoDB
+		m.state.ClearDynamoDBQuery()
+		m.dynamodbQueryResults.Clear()
+		m.updateTablesList()
+		return nil
+
+	case "up", "k":
+		m.dynamodbQueryResults.Up()
+		return nil
+
+	case "down", "j":
+		m.dynamodbQueryResults.Down()
+		return nil
+
+	case "g":
+		m.dynamodbQueryResults.Top()
+		return nil
+
+	case "G":
+		m.dynamodbQueryResults.Bottom()
+		return nil
+
+	case "J":
+		// Scroll JSON panel down
+		m.dynamodbQueryResults.ScrollJSONDown()
+		return nil
+
+	case "K":
+		// Scroll JSON panel up
+		m.dynamodbQueryResults.ScrollJSONUp()
+		return nil
+
+	case "n":
+		// Load next page if available
+		if m.dynamodbQueryResults.HasMorePages() && !m.state.DynamoDBQueryLoading {
+			m.state.DynamoDBQueryLoading = true
+			m.dynamodbQueryResults.SetLoading(true)
+			m.logger.Info("Loading next page of results...")
+			return m.loadNextDynamoDBPage()
+		}
+		return nil
+
+	case "r":
+		// Re-run the query/scan
+		if m.state.DynamoDBIsQuery && m.state.DynamoDBQueryParams != nil {
+			m.state.DynamoDBQueryLoading = true
+			m.state.DynamoDBLastKey = nil
+			m.dynamodbQueryResults.SetLoading(true)
+			m.dynamodbQueryResults.Clear()
+			return m.executeDynamoDBQuery(m.state.DynamoDBQueryParams)
+		} else if !m.state.DynamoDBIsQuery && m.state.DynamoDBScanParams != nil {
+			m.state.DynamoDBQueryLoading = true
+			m.state.DynamoDBLastKey = nil
+			m.dynamodbQueryResults.SetLoading(true)
+			m.dynamodbQueryResults.Clear()
+			return m.executeDynamoDBScan(m.state.DynamoDBScanParams)
+		}
+		return nil
+	}
+
+	return nil
 }

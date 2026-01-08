@@ -27,6 +27,8 @@ const (
 	ViewCloudWatchLogs  // CloudWatch logs streaming view
 	ViewSQS             // SQS queues view
 	ViewSQSDetails      // SQS queue details view
+	ViewDynamoDB        // DynamoDB tables view
+	ViewDynamoDBQuery   // DynamoDB query results view
 	ViewRegionSelect    // Region selection view
 )
 
@@ -126,6 +128,21 @@ type State struct {
 	QueuesLoading bool
 	QueuesError   error
 	SelectedQueue *model.Queue
+
+	// DynamoDB Tables state
+	Tables        []model.Table
+	TablesLoading bool
+	TablesError   error
+	SelectedTable *model.Table
+
+	// DynamoDB Query state
+	DynamoDBQueryResult  *model.QueryResult
+	DynamoDBQueryParams  *model.QueryParams
+	DynamoDBScanParams   *model.ScanParams
+	DynamoDBQueryLoading bool
+	DynamoDBQueryError   error
+	DynamoDBLastKey      map[string]interface{} // For pagination
+	DynamoDBIsQuery      bool                   // true = query, false = scan
 
 	// UI state
 	ShowLogs      bool
@@ -324,6 +341,30 @@ func (s *State) ClearQueues() {
 // SelectQueue sets the selected SQS queue.
 func (s *State) SelectQueue(queue *model.Queue) {
 	s.SelectedQueue = queue
+}
+
+// ClearTables clears DynamoDB table data.
+func (s *State) ClearTables() {
+	s.Tables = nil
+	s.TablesLoading = false
+	s.TablesError = nil
+	s.SelectedTable = nil
+}
+
+// SelectTable sets the selected DynamoDB table.
+func (s *State) SelectTable(table *model.Table) {
+	s.SelectedTable = table
+}
+
+// ClearDynamoDBQuery clears DynamoDB query state.
+func (s *State) ClearDynamoDBQuery() {
+	s.DynamoDBQueryResult = nil
+	s.DynamoDBQueryParams = nil
+	s.DynamoDBScanParams = nil
+	s.DynamoDBQueryLoading = false
+	s.DynamoDBQueryError = nil
+	s.DynamoDBLastKey = nil
+	s.DynamoDBIsQuery = false
 }
 
 // SelectStack sets the selected stack and changes view to services.
@@ -535,6 +576,21 @@ func (s *State) FilteredQueues() []model.Queue {
 	for _, q := range s.Queues {
 		if containsIgnoreCase(q.Name, s.FilterText) {
 			filtered = append(filtered, q)
+		}
+	}
+	return filtered
+}
+
+// FilteredTables returns DynamoDB tables filtered by the current filter text.
+func (s *State) FilteredTables() []model.Table {
+	if s.FilterText == "" {
+		return s.Tables
+	}
+
+	var filtered []model.Table
+	for _, t := range s.Tables {
+		if containsIgnoreCase(t.Name, s.FilterText) {
+			filtered = append(filtered, t)
 		}
 	}
 	return filtered

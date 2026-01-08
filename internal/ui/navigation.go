@@ -1,6 +1,10 @@
 package ui
 
-import "vaws/internal/state"
+import (
+	tea "github.com/charmbracelet/bubbletea"
+
+	"vaws/internal/state"
+)
 
 // startFiltering enters filter mode.
 func (m *Model) startFiltering() {
@@ -40,6 +44,9 @@ func (m *Model) moveCursorUp() {
 	case state.ViewSQS:
 		m.sqsTable.Up()
 		m.updateQueueDetails()
+	case state.ViewDynamoDB:
+		m.dynamodbTable.Up()
+		m.updateTableDetails()
 	case state.ViewTunnels:
 		m.tunnelsPanel.Up()
 	}
@@ -76,6 +83,9 @@ func (m *Model) moveCursorDown() {
 	case state.ViewSQS:
 		m.sqsTable.Down()
 		m.updateQueueDetails()
+	case state.ViewDynamoDB:
+		m.dynamodbTable.Down()
+		m.updateTableDetails()
 	case state.ViewTunnels:
 		m.tunnelsPanel.Down()
 	}
@@ -112,6 +122,9 @@ func (m *Model) moveCursorTop() {
 	case state.ViewSQS:
 		m.sqsTable.Top()
 		m.updateQueueDetails()
+	case state.ViewDynamoDB:
+		m.dynamodbTable.Top()
+		m.updateTableDetails()
 	}
 }
 
@@ -146,7 +159,25 @@ func (m *Model) moveCursorBottom() {
 	case state.ViewSQS:
 		m.sqsTable.Bottom()
 		m.updateQueueDetails()
+	case state.ViewDynamoDB:
+		m.dynamodbTable.Bottom()
+		m.updateTableDetails()
 	}
+}
+
+// switchToDynamoDB switches to the DynamoDB tables view.
+func (m *Model) switchToDynamoDB() tea.Cmd {
+	m.state.View = state.ViewDynamoDB
+	m.state.SelectedStack = nil
+	m.state.FilterText = ""
+	m.filterInput.SetValue("")
+	m.quickBar.SetActiveResource("6")
+	// Only load if not already loaded
+	if len(m.state.Tables) == 0 && !m.state.TablesLoading {
+		return m.loadTables()
+	}
+	m.updateTablesList()
+	return nil
 }
 
 // showTunnelsView switches to the tunnels view.
@@ -174,6 +205,7 @@ func (m *Model) showHelp() {
 	m.logger.Info("  3            SQS Queues")
 	m.logger.Info("  4            API Gateway")
 	m.logger.Info("  5            CloudFormation Stacks")
+	m.logger.Info("  6            DynamoDB Tables")
 	m.logger.Info("")
 	m.logger.Info("ACTIONS:")
 	m.logger.Info("  :            Open command palette")
@@ -195,6 +227,7 @@ func (m *Model) showHelp() {
 	m.logger.Info("  :sqs         SQS queues")
 	m.logger.Info("  :apigateway  API Gateway")
 	m.logger.Info("  :stacks      CloudFormation stacks")
+	m.logger.Info("  :dynamodb    DynamoDB tables")
 	m.logger.Info("  :region      Change AWS region")
 	m.logger.Info("  :tunnels     Port forward tunnels")
 	m.logger.Info("  :logs        Toggle logs panel")

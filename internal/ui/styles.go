@@ -162,6 +162,25 @@ func FunctionStatusStyle(state model.FunctionState) lipgloss.Style {
 	}
 }
 
+// TableStatusStyle returns the appropriate style for a DynamoDB table status.
+func TableStatusStyle(status model.TableStatus) lipgloss.Style {
+	s := GetStyles()
+	switch status {
+	case model.TableStatusActive:
+		return s.StatusHealthy
+	case model.TableStatusCreating, model.TableStatusUpdating:
+		return s.StatusInProgress
+	case model.TableStatusDeleting:
+		return s.StatusWarning
+	case model.TableStatusArchiving, model.TableStatusArchived:
+		return s.StatusWarning
+	case model.TableStatusInaccessible:
+		return s.StatusError
+	default:
+		return s.Muted
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && findSubstring(s, substr) >= 0
 }

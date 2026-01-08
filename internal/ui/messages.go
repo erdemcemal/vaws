@@ -130,6 +130,12 @@ type (
 		err    error
 	}
 
+	// tablesLoadedMsg is sent when DynamoDB tables are loaded.
+	tablesLoadedMsg struct {
+		tables []model.Table
+		err    error
+	}
+
 	// clustersLoadedMsg is sent when ECS clusters are loaded.
 	clustersLoadedMsg struct {
 		clusters []model.Cluster
@@ -146,6 +152,12 @@ type (
 	regionChangedMsg struct {
 		client *aws.Client
 		region string
+		err    error
+	}
+
+	// dynamoDBQueryResultMsg is sent when a DynamoDB query/scan completes.
+	dynamoDBQueryResultMsg struct {
+		result *model.QueryResult
 		err    error
 	}
 )

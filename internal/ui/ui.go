@@ -61,11 +61,14 @@ type Model struct {
 	lambdaList          *components.List
 	apiGatewayList      *components.List
 	apiStagesList       *components.List
-	ec2List             *components.List       // For jump host selection
-	containerList       *components.List       // For container selection in port forwarding
-	sqsTable            *components.SQSTable   // For SQS queues table view
-	sqsDetails          *components.SQSDetails // For SQS queue details view
-	details             *components.Details
+	ec2List             *components.List            // For jump host selection
+	containerList       *components.List            // For container selection in port forwarding
+	sqsTable             *components.SQSTable             // For SQS queues table view
+	sqsDetails           *components.SQSDetails           // For SQS queue details view
+	dynamodbTable        *components.DynamoDBTable        // For DynamoDB tables view
+	dynamodbQueryDialog  *components.DynamoDBQueryDialog  // For DynamoDB query input
+	dynamodbQueryResults *components.DynamoDBQueryResults // For DynamoDB query results
+	details              *components.Details
 	logs                *components.Logs
 	tunnelsPanel        *components.TunnelsPanel
 	cloudWatchLogsPanel *components.CloudWatchLogsPanel
@@ -160,17 +163,20 @@ func New(client *aws.Client, logger *log.Logger, version string) *Model {
 		containerList:       components.NewList("Select Container"),
 		sqsTable:            components.NewSQSTable(),
 		sqsDetails:          components.NewSQSDetails(),
-		details:             components.NewDetails(),
-		logs:                components.NewLogs(logger),
-		tunnelsPanel:        components.NewTunnelsPanel(),
-		cloudWatchLogsPanel: components.NewCloudWatchLogsPanel(),
-		commandPalette:      components.NewCommandPalette(),
-		refreshIndicator:    components.NewRefreshIndicator(),
-		statusBar:           statusBar,
-		container:           components.NewContainer(),
-		quickBar:            quickBar,
-		regionSelector:      components.NewRegionSelector(),
-		filterInput:         ti,
+		dynamodbTable:        components.NewDynamoDBTable(),
+		dynamodbQueryDialog:  components.NewDynamoDBQueryDialog(),
+		dynamodbQueryResults: components.NewDynamoDBQueryResults(),
+		details:              components.NewDetails(),
+		logs:                 components.NewLogs(logger),
+		tunnelsPanel:         components.NewTunnelsPanel(),
+		cloudWatchLogsPanel:  components.NewCloudWatchLogsPanel(),
+		commandPalette:       components.NewCommandPalette(),
+		refreshIndicator:     components.NewRefreshIndicator(),
+		statusBar:            statusBar,
+		container:            components.NewContainer(),
+		quickBar:             quickBar,
+		regionSelector:       components.NewRegionSelector(),
+		filterInput:          ti,
 		portInput:           portInput,
 		payloadInput:        payloadInput,
 		keys:                DefaultKeyMap(),
@@ -227,14 +233,17 @@ func NewWithProfileSelection(profiles []string, region string, logger *log.Logge
 		apiStagesList:       components.NewList("API Stages"),
 		ec2List:             components.NewList("Select Jump Host"),
 		containerList:       components.NewList("Select Container"),
-		sqsTable:            components.NewSQSTable(),
-		sqsDetails:          components.NewSQSDetails(),
-		details:             components.NewDetails(),
-		logs:                components.NewLogs(logger),
-		tunnelsPanel:        components.NewTunnelsPanel(),
-		cloudWatchLogsPanel: components.NewCloudWatchLogsPanel(),
-		profileSelector:     profileSelector,
-		commandPalette:      components.NewCommandPalette(),
+		sqsTable:             components.NewSQSTable(),
+		sqsDetails:           components.NewSQSDetails(),
+		dynamodbTable:        components.NewDynamoDBTable(),
+		dynamodbQueryDialog:  components.NewDynamoDBQueryDialog(),
+		dynamodbQueryResults: components.NewDynamoDBQueryResults(),
+		details:              components.NewDetails(),
+		logs:                 components.NewLogs(logger),
+		tunnelsPanel:         components.NewTunnelsPanel(),
+		cloudWatchLogsPanel:  components.NewCloudWatchLogsPanel(),
+		profileSelector:      profileSelector,
+		commandPalette:       components.NewCommandPalette(),
 		refreshIndicator:    components.NewRefreshIndicator(),
 		statusBar:           statusBar,
 		container:           components.NewContainer(),
@@ -366,6 +375,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state.ClearStacks()
 		m.state.ClearServices()
 		m.state.ClearQueues()
+		m.state.ClearTables()
 		m.state.ClearFunctions()
 		m.state.ClearAPIs()
 		m.state.Clusters = nil
@@ -405,13 +415,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clustersList.Spinner().Tick()
 		m.serviceList.Spinner().Tick()
 		m.sqsTable.Spinner().Tick()
+		m.dynamodbTable.Spinner().Tick()
 		m.lambdaList.Spinner().Tick()
 		m.apiGatewayList.Spinner().Tick()
 		m.ec2List.Spinner().Tick()
 
 		// Keep ticking while anything is loading
 		if m.state.StacksLoading || m.state.ClustersLoading || m.state.ServicesLoading || m.state.QueuesLoading ||
-			m.state.FunctionsLoading || m.state.APIsLoading || m.state.EC2InstancesLoading {
+			m.state.TablesLoading || m.state.FunctionsLoading || m.state.APIsLoading || m.state.EC2InstancesLoading {
 			cmds = append(cmds, m.stacksList.Spinner().TickCmd())
 		}
 
@@ -825,6 +836,43 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logger.Info("Loaded %d ECS clusters", len(msg.clusters))
 		}
 		m.updateClustersList()
+
+	case tablesLoadedMsg:
+		m.state.TablesLoading = false
+		m.dynamodbTable.SetLoading(false)
+		m.refreshIndicator.SetRefreshing(false)
+		if msg.err != nil {
+			m.state.TablesError = msg.err
+			m.logger.Error("Failed to load DynamoDB tables: %v", msg.err)
+		} else {
+			m.state.Tables = msg.tables
+			m.state.TablesError = nil
+			m.logger.Info("Loaded %d DynamoDB tables", len(msg.tables))
+		}
+		m.updateTablesList()
+
+	case dynamoDBQueryResultMsg:
+		m.state.DynamoDBQueryLoading = false
+		m.dynamodbQueryResults.SetLoading(false)
+		if msg.err != nil {
+			m.state.DynamoDBQueryError = msg.err
+			m.dynamodbQueryResults.SetError(msg.err)
+			m.logger.Error("DynamoDB query failed: %v", msg.err)
+		} else {
+			m.state.DynamoDBQueryResult = msg.result
+			m.state.DynamoDBQueryError = nil
+			tableName := ""
+			pkName := ""
+			skName := ""
+			if m.state.SelectedTable != nil {
+				tableName = m.state.SelectedTable.Name
+				pkName = m.state.SelectedTable.PartitionKey()
+				skName = m.state.SelectedTable.SortKey()
+			}
+			m.dynamodbQueryResults.SetResult(msg.result, tableName, pkName, skName)
+			m.logger.Info("Query returned %d items (scanned: %d, capacity: %.2f)",
+				msg.result.Count, msg.result.ScannedCount, msg.result.ConsumedCapacity)
+		}
 
 	case lambdaInvocationResultMsg:
 		m.state.LambdaInvocationLoading = false

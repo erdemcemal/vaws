@@ -289,3 +289,82 @@ func (m *Model) updateQueueDetails() {
 	m.details.SetTitle("SQS Queue Details")
 	m.details.SetRows(rows)
 }
+
+// updateTableDetails updates the details panel with DynamoDB table information.
+func (m *Model) updateTableDetails() {
+	t := m.dynamodbTable.SelectedTable()
+	if t == nil {
+		m.details.SetTitle("DynamoDB Table Details")
+		m.details.SetRows(nil)
+		return
+	}
+
+	rows := []components.DetailRow{
+		{Label: "Name", Value: t.Name},
+		{Label: "Status", Value: string(t.Status), Style: TableStatusStyle(t.Status)},
+		{Label: "", Value: ""}, // Spacer
+	}
+
+	// Key schema
+	pk := t.PartitionKey()
+	sk := t.SortKey()
+	if pk != "" {
+		rows = append(rows, components.DetailRow{Label: "Partition Key", Value: pk})
+	}
+	if sk != "" {
+		rows = append(rows, components.DetailRow{Label: "Sort Key", Value: sk})
+	}
+
+	rows = append(rows, components.DetailRow{Label: "", Value: ""}) // Spacer
+
+	// Capacity
+	rows = append(rows, components.DetailRow{Label: "Billing Mode", Value: string(t.BillingMode)})
+	if t.BillingMode == "PROVISIONED" {
+		rows = append(rows, components.DetailRow{Label: "Read Capacity", Value: fmt.Sprintf("%d", t.ReadCapacityUnits)})
+		rows = append(rows, components.DetailRow{Label: "Write Capacity", Value: fmt.Sprintf("%d", t.WriteCapacityUnits)})
+	}
+
+	rows = append(rows, components.DetailRow{Label: "", Value: ""}) // Spacer
+
+	// Stats
+	rows = append(rows, components.DetailRow{Label: "Items", Value: fmt.Sprintf("%d", t.ItemCount)})
+	rows = append(rows, components.DetailRow{Label: "Size", Value: formatBytes(t.SizeBytes)})
+
+	// Indexes
+	if len(t.GlobalSecondaryIndexes) > 0 {
+		rows = append(rows, components.DetailRow{Label: "", Value: ""}) // Spacer
+		rows = append(rows, components.DetailRow{Label: "GSIs", Value: fmt.Sprintf("%d", len(t.GlobalSecondaryIndexes))})
+		for _, gsi := range t.GlobalSecondaryIndexes {
+			rows = append(rows, components.DetailRow{Label: "  " + gsi.IndexName, Value: gsi.Status})
+		}
+	}
+	if len(t.LocalSecondaryIndexes) > 0 {
+		rows = append(rows, components.DetailRow{Label: "LSIs", Value: fmt.Sprintf("%d", len(t.LocalSecondaryIndexes))})
+	}
+
+	// Features
+	rows = append(rows, components.DetailRow{Label: "", Value: ""}) // Spacer
+	ttlStatus := "Disabled"
+	if t.TTLEnabled {
+		ttlStatus = fmt.Sprintf("Enabled (%s)", t.TTLAttribute)
+	}
+	rows = append(rows, components.DetailRow{Label: "TTL", Value: ttlStatus})
+
+	streamStatus := "Disabled"
+	if t.StreamEnabled {
+		streamStatus = fmt.Sprintf("Enabled (%s)", t.StreamViewType)
+	}
+	rows = append(rows, components.DetailRow{Label: "Streams", Value: streamStatus})
+
+	if t.DeletionProtection {
+		rows = append(rows, components.DetailRow{Label: "Delete Protection", Value: "Enabled"})
+	}
+
+	if !t.CreatedAt.IsZero() {
+		rows = append(rows, components.DetailRow{Label: "", Value: ""}) // Spacer
+		rows = append(rows, components.DetailRow{Label: "Created", Value: t.CreatedAt.Format("2006-01-02 15:04:05")})
+	}
+
+	m.details.SetTitle("DynamoDB Table Details")
+	m.details.SetRows(rows)
+}

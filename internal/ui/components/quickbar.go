@@ -37,6 +37,7 @@ func NewQuickBar() *QuickBar {
 			{Key: "3", Label: "SQS"},
 			{Key: "4", Label: "API"},
 			{Key: "5", Label: "Stacks"},
+			{Key: "6", Label: "DynamoDB"},
 		},
 		actionKeys: []QuickKey{
 			{Key: ":", Label: "command"},
@@ -199,5 +200,6 @@ func DefaultResourceKeys() []QuickKey {
 		{Key: "3", Label: "SQS"},
 		{Key: "4", Label: "API"},
 		{Key: "5", Label: "Stacks"},
+		{Key: "6", Label: "DynamoDB"},
 	}
 }

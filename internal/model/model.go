@@ -490,3 +490,181 @@ type Queue struct {
 func (q *Queue) HasDLQMessages() bool {
 	return q.HasDLQ && q.DLQMessageCount > 0
 }
+
+// TableStatus represents the status of a DynamoDB table.
+type TableStatus string
+
+const (
+	TableStatusCreating    TableStatus = "CREATING"
+	TableStatusActive      TableStatus = "ACTIVE"
+	TableStatusDeleting    TableStatus = "DELETING"
+	TableStatusUpdating    TableStatus = "UPDATING"
+	TableStatusArchiving   TableStatus = "ARCHIVING"
+	TableStatusArchived    TableStatus = "ARCHIVED"
+	TableStatusInaccessible TableStatus = "INACCESSIBLE_ENCRYPTION_CREDENTIALS"
+)
+
+// IsHealthy returns true if the table is active.
+func (s TableStatus) IsHealthy() bool {
+	return s == TableStatusActive
+}
+
+// IsInProgress returns true if the table is being modified.
+func (s TableStatus) IsInProgress() bool {
+	switch s {
+	case TableStatusCreating, TableStatusDeleting, TableStatusUpdating, TableStatusArchiving:
+		return true
+	default:
+		return false
+	}
+}
+
+// BillingMode represents the billing mode of a DynamoDB table.
+type BillingMode string
+
+const (
+	BillingModeProvisioned   BillingMode = "PROVISIONED"
+	BillingModePayPerRequest BillingMode = "PAY_PER_REQUEST"
+)
+
+// KeySchemaElement represents a key attribute in DynamoDB.
+type KeySchemaElement struct {
+	AttributeName string
+	KeyType       string // HASH or RANGE
+}
+
+// GlobalSecondaryIndex represents a GSI on a DynamoDB table.
+type GlobalSecondaryIndex struct {
+	IndexName  string
+	KeySchema  []KeySchemaElement
+	Status     string
+	ItemCount  int64
+	SizeBytes  int64
+}
+
+// LocalSecondaryIndex represents an LSI on a DynamoDB table.
+type LocalSecondaryIndex struct {
+	IndexName  string
+	KeySchema  []KeySchemaElement
+	ItemCount  int64
+	SizeBytes  int64
+}
+
+// Table represents a DynamoDB table.
+type Table struct {
+	Name                   string
+	ARN                    string
+	Status                 TableStatus
+	KeySchema              []KeySchemaElement
+	ItemCount              int64
+	SizeBytes              int64
+	CreatedAt              time.Time
+	BillingMode            BillingMode
+	ReadCapacityUnits      int64
+	WriteCapacityUnits     int64
+	GlobalSecondaryIndexes []GlobalSecondaryIndex
+	LocalSecondaryIndexes  []LocalSecondaryIndex
+	TTLEnabled             bool
+	TTLAttribute           string
+	StreamEnabled          bool
+	StreamViewType         string
+	DeletionProtection     bool
+}
+
+// IsHealthy returns true if the table is active.
+func (t *Table) IsHealthy() bool {
+	return t.Status == TableStatusActive
+}
+
+// PartitionKey returns the partition key attribute name.
+func (t *Table) PartitionKey() string {
+	for _, k := range t.KeySchema {
+		if k.KeyType == "HASH" {
+			return k.AttributeName
+		}
+	}
+	return ""
+}
+
+// SortKey returns the sort key attribute name (if any).
+func (t *Table) SortKey() string {
+	for _, k := range t.KeySchema {
+		if k.KeyType == "RANGE" {
+			return k.AttributeName
+		}
+	}
+	return ""
+}
+
+// SortKeyCondition represents the condition type for sort key in a query.
+type SortKeyCondition string
+
+const (
+	SortKeyConditionEquals     SortKeyCondition = "="
+	SortKeyConditionLessThan   SortKeyCondition = "<"
+	SortKeyConditionLessEqual  SortKeyCondition = "<="
+	SortKeyConditionGreater    SortKeyCondition = ">"
+	SortKeyConditionGreaterEq  SortKeyCondition = ">="
+	SortKeyConditionBetween    SortKeyCondition = "BETWEEN"
+	SortKeyConditionBeginsWith SortKeyCondition = "begins_with"
+)
+
+// QueryParams holds parameters for a DynamoDB query.
+type QueryParams struct {
+	TableName         string
+	PartitionKeyName  string
+	PartitionKeyVal   string
+	SortKeyName       string
+	SortKeyVal        string
+	SortKeyVal2       string // For BETWEEN condition
+	SortKeyCondition  SortKeyCondition
+	FilterExpression  string
+	FilterAttrName    string
+	FilterAttrValue   string
+	Limit             int32
+	ScanIndexForward  bool // true = ascending, false = descending
+	IndexName         string
+}
+
+// ScanParams holds parameters for a DynamoDB scan.
+type ScanParams struct {
+	TableName        string
+	PartitionKeyName string
+	SortKeyName      string
+	FilterExpression string
+	FilterAttrName   string
+	FilterAttrValue  string
+	Limit            int32
+	IndexName        string
+}
+
+// DynamoDBItem represents a single item from DynamoDB.
+type DynamoDBItem struct {
+	// Raw holds the item as a map of attribute name to value
+	// Values are stored as their string representation for display
+	Raw map[string]interface{}
+	// JSON is the formatted JSON string of the item
+	JSON string
+	// PartitionKeyValue is the PK value for quick display
+	PartitionKeyValue string
+	// SortKeyValue is the SK value for quick display (may be empty)
+	SortKeyValue string
+}
+
+// Preview returns a truncated preview of the item for list display.
+func (d *DynamoDBItem) Preview(maxLen int) string {
+	if len(d.JSON) <= maxLen {
+		return d.JSON
+	}
+	return d.JSON[:maxLen-3] + "..."
+}
+
+// QueryResult holds the result of a DynamoDB query or scan.
+type QueryResult struct {
+	Items             []DynamoDBItem
+	Count             int
+	ScannedCount      int
+	LastEvaluatedKey  map[string]interface{}
+	ConsumedCapacity  float64
+	HasMorePages      bool
+}

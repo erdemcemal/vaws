@@ -55,6 +55,19 @@ func (m *Model) updateQuickBarActions() {
 		}
 	case state.ViewSQS:
 		// No special actions for SQS list
+	case state.ViewDynamoDB:
+		actions = []components.QuickKey{
+			{Key: "q", Label: "query"},
+			{Key: "s", Label: "scan"},
+		}
+	case state.ViewDynamoDBQuery:
+		actions = []components.QuickKey{
+			{Key: "q", Label: "query"},
+			{Key: "s", Label: "scan"},
+			{Key: "n", Label: "next page"},
+			{Key: "J/K", Label: "scroll JSON"},
+			{Key: "r", Label: "refresh"},
+		}
 	case state.ViewCloudWatchLogs:
 		actions = []components.QuickKey{
 			{Key: "Tab", Label: "switch container"},
@@ -107,6 +120,13 @@ func (m *Model) updateMainMenuList() {
 			Status:      "📦",
 			StatusStyle: lipgloss.NewStyle().Foreground(theme.TextMuted),
 		},
+		{
+			ID:          "dynamodb-tables",
+			Title:       "[6] DynamoDB Tables",
+			Description: "Browse DynamoDB tables",
+			Status:      "🗃️",
+			StatusStyle: lipgloss.NewStyle().Foreground(theme.Info),
+		},
 	}
 	m.mainMenuList.SetItems(items)
 	m.mainMenuList.SetLoading(false)
@@ -119,7 +139,7 @@ func (m *Model) updateMainMenuList() {
 		{Label: "Profile", Value: m.state.Profile},
 		{Label: "Region", Value: m.state.Region},
 		{Label: "", Value: ""},
-		{Label: "Hint", Value: "Select a resource or press 1-5"},
+		{Label: "Hint", Value: "Select a resource or press 1-6"},
 	})
 }
 
@@ -395,6 +415,15 @@ func (m *Model) updateQueuesList() {
 	m.updateQueueDetails()
 }
 
+// updateTablesList updates the DynamoDB tables list with current data.
+func (m *Model) updateTablesList() {
+	tables := m.state.FilteredTables()
+	m.dynamodbTable.SetTables(tables)
+	m.dynamodbTable.SetLoading(false)
+	m.dynamodbTable.SetError(m.state.TablesError)
+	m.updateTableDetails()
+}
+
 // updateCurrentList updates the current list based on the active view.
 func (m *Model) updateCurrentList() {
 	switch m.state.View {
@@ -420,6 +449,8 @@ func (m *Model) updateCurrentList() {
 		m.updateContainerList()
 	case state.ViewSQS:
 		m.updateQueuesList()
+	case state.ViewDynamoDB:
+		m.updateTablesList()
 	}
 }
 
@@ -498,6 +529,13 @@ func (m *Model) updateContainerContext() {
 		} else {
 			m.container.SetItemCount(len(m.state.FilteredQueues()))
 		}
+	case state.ViewDynamoDB:
+		m.container.SetTitle("DynamoDB Tables")
+		if m.state.TablesLoading {
+			m.container.SetItemCount(0)
+		} else {
+			m.container.SetItemCount(len(m.state.FilteredTables()))
+		}
 	case state.ViewJumpHostSelect:
 		m.container.SetTitle("Select Jump Host")
 		m.container.SetItemCount(len(m.state.EC2Instances))
@@ -507,6 +545,17 @@ func (m *Model) updateContainerContext() {
 	case state.ViewTunnels:
 		m.container.SetTitle("Active Tunnels")
 		m.container.SetItemCount(len(m.tunnelManager.GetTunnels()))
+	case state.ViewDynamoDBQuery:
+		title := "DynamoDB Query Results"
+		if m.state.SelectedTable != nil {
+			if m.state.DynamoDBIsQuery {
+				title = "Query: " + m.state.SelectedTable.Name
+			} else {
+				title = "Scan: " + m.state.SelectedTable.Name
+			}
+		}
+		m.container.SetTitle(title)
+		m.container.SetItemCount(m.dynamodbQueryResults.ItemCount())
 	case state.ViewCloudWatchLogs:
 		m.container.SetTitle("CloudWatch Logs")
 		m.container.SetItemCount(0)

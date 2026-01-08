@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/apigatewayv2"
 	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
@@ -23,18 +24,19 @@ import (
 
 // Client wraps AWS service clients for a specific profile/region.
 type Client struct {
-	cfg     aws.Config
-	profile string
-	region  string
-	cfn     *cloudformation.Client
-	ecs     *ecs.Client
-	lambda  *lambda.Client
-	apigw   *apigateway.Client
-	apigwv2 *apigatewayv2.Client
-	ec2     *ec2.Client
-	ssm     *ssm.Client
-	cwlogs  *cloudwatchlogs.Client
-	sqs     *sqs.Client
+	cfg      aws.Config
+	profile  string
+	region   string
+	cfn      *cloudformation.Client
+	ecs      *ecs.Client
+	lambda   *lambda.Client
+	apigw    *apigateway.Client
+	apigwv2  *apigatewayv2.Client
+	ec2      *ec2.Client
+	ssm      *ssm.Client
+	cwlogs   *cloudwatchlogs.Client
+	sqs      *sqs.Client
+	dynamodb *dynamodb.Client
 }
 
 // NewClient creates a new AWS client using the specified profile.
@@ -61,18 +63,19 @@ func NewClient(ctx context.Context, profile, region string) (*Client, error) {
 	}
 
 	return &Client{
-		cfg:     cfg,
-		profile: profile,
-		region:  region,
-		cfn:     cloudformation.NewFromConfig(cfg),
-		ecs:     ecs.NewFromConfig(cfg),
-		lambda:  lambda.NewFromConfig(cfg),
-		apigw:   apigateway.NewFromConfig(cfg),
-		apigwv2: apigatewayv2.NewFromConfig(cfg),
-		ec2:     ec2.NewFromConfig(cfg),
-		ssm:     ssm.NewFromConfig(cfg),
-		cwlogs:  cloudwatchlogs.NewFromConfig(cfg),
-		sqs:     sqs.NewFromConfig(cfg),
+		cfg:      cfg,
+		profile:  profile,
+		region:   region,
+		cfn:      cloudformation.NewFromConfig(cfg),
+		ecs:      ecs.NewFromConfig(cfg),
+		lambda:   lambda.NewFromConfig(cfg),
+		apigw:    apigateway.NewFromConfig(cfg),
+		apigwv2:  apigatewayv2.NewFromConfig(cfg),
+		ec2:      ec2.NewFromConfig(cfg),
+		ssm:      ssm.NewFromConfig(cfg),
+		cwlogs:   cloudwatchlogs.NewFromConfig(cfg),
+		sqs:      sqs.NewFromConfig(cfg),
+		dynamodb: dynamodb.NewFromConfig(cfg),
 	}, nil
 }
 
@@ -129,6 +132,11 @@ func (c *Client) CloudWatchLogs() *cloudwatchlogs.Client {
 // SQS returns the SQS client.
 func (c *Client) SQS() *sqs.Client {
 	return c.sqs
+}
+
+// DynamoDB returns the DynamoDB client.
+func (c *Client) DynamoDB() *dynamodb.Client {
+	return c.dynamodb
 }
 
 // Config returns the underlying AWS config.

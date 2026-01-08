@@ -165,6 +165,12 @@ func (m *Model) View() string {
 		// Center the payload input dialog inside container
 		m.container.SetContent(lipgloss.Place(m.container.ContentWidth(), m.container.ContentHeight(), lipgloss.Center, lipgloss.Center, payloadInputView))
 		sections = append(sections, m.container.View())
+	} else if m.dynamodbQueryDialog.IsActive() {
+		// Center the DynamoDB query dialog inside container
+		m.dynamodbQueryDialog.SetSize(m.container.ContentWidth(), m.container.ContentHeight())
+		queryDialogView := m.dynamodbQueryDialog.View()
+		m.container.SetContent(lipgloss.Place(m.container.ContentWidth(), m.container.ContentHeight(), lipgloss.Center, lipgloss.Center, queryDialogView))
+		sections = append(sections, m.container.View())
 	} else {
 		// Set content inside container
 		m.container.SetContent(contentView)
@@ -212,6 +218,12 @@ func (m *Model) renderMainContent(layout layoutMode, contentHeight int) string {
 		return m.cloudWatchLogsPanel.View()
 	}
 
+	// DynamoDB query results view takes full screen
+	if m.state.View == state.ViewDynamoDBQuery {
+		m.dynamodbQueryResults.SetSize(containerWidth, contentHeight)
+		return m.dynamodbQueryResults.View()
+	}
+
 	// Calculate sizes first
 	var listWidth, detailsWidth int
 	if layout == layoutSingle {
@@ -233,6 +245,7 @@ func (m *Model) renderMainContent(layout layoutMode, contentHeight int) string {
 	m.ec2List.SetSize(listWidth, contentHeight)
 	m.containerList.SetSize(listWidth, contentHeight)
 	m.sqsTable.SetSize(listWidth, contentHeight)
+	m.dynamodbTable.SetSize(listWidth, contentHeight)
 	if layout != layoutSingle {
 		m.details.SetSize(detailsWidth, contentHeight)
 	}
@@ -262,6 +275,8 @@ func (m *Model) renderMainContent(layout layoutMode, contentHeight int) string {
 		listView = m.containerList.View()
 	case state.ViewSQS:
 		listView = m.sqsTable.View()
+	case state.ViewDynamoDB:
+		listView = m.dynamodbTable.View()
 	}
 
 	// Filter input (shown above list when filtering)
