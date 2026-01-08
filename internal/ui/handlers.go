@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"golang.design/x/clipboard"
 
 	"vaws/internal/aws"
 	"vaws/internal/model"
@@ -18,6 +19,11 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 	// Handle filter mode separately
 	if m.filtering {
 		return m.handleFilterKey(msg)
+	}
+
+	// Handle details search mode separately
+	if m.detailsSearching {
+		return m.handleDetailsSearchKey(msg)
 	}
 
 	// Handle port input mode separately
@@ -33,6 +39,45 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 	// Handle DynamoDB query dialog
 	if m.dynamodbQueryDialog.IsActive() {
 		return m.handleDynamoDBQueryDialogKey(msg)
+	}
+
+	// Handle copy mode - allow scroll keys and y/esc to exit
+	if m.copyMode {
+		switch msg.String() {
+		case "y", "esc":
+			m.copyMode = false
+			m.copyModeScroll = 0
+			// Re-enable mouse capture when exiting copy mode
+			return tea.EnableMouseCellMotion
+		case "ctrl+c":
+			m.tunnelManager.StopAllTunnels()
+			return tea.Quit
+		case "j", "down":
+			m.copyModeScroll++
+			return nil
+		case "k", "up":
+			if m.copyModeScroll > 0 {
+				m.copyModeScroll--
+			}
+			return nil
+		case "ctrl+d":
+			m.copyModeScroll += 10
+			return nil
+		case "ctrl+u":
+			if m.copyModeScroll >= 10 {
+				m.copyModeScroll -= 10
+			} else {
+				m.copyModeScroll = 0
+			}
+			return nil
+		case "g":
+			m.copyModeScroll = 0
+			return nil
+		case "G":
+			m.copyModeScroll = 9999 // Will be clamped in view
+			return nil
+		}
+		return nil // Ignore other keys in copy mode
 	}
 
 	// Handle DynamoDB query results navigation
@@ -52,16 +97,68 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 		}
 
 	case matchKey(msg, m.keys.Up):
-		m.moveCursorUp()
+		if m.details.IsFocused() {
+			m.details.ScrollUp()
+		} else {
+			m.moveCursorUp()
+		}
 
 	case matchKey(msg, m.keys.Down):
-		m.moveCursorDown()
+		if m.details.IsFocused() {
+			m.details.ScrollDown()
+		} else {
+			m.moveCursorDown()
+		}
 
 	case matchKey(msg, m.keys.Top):
-		m.moveCursorTop()
+		if m.details.IsFocused() {
+			m.details.ScrollToTop()
+		} else {
+			m.moveCursorTop()
+		}
 
 	case matchKey(msg, m.keys.Bottom):
-		m.moveCursorBottom()
+		if m.details.IsFocused() {
+			m.details.ScrollToBottom()
+		} else {
+			m.moveCursorBottom()
+		}
+
+	case msg.String() == "ctrl+d":
+		// Half page down (vim-like)
+		if m.details.IsFocused() {
+			m.details.ScrollHalfPageDown()
+		}
+
+	case msg.String() == "ctrl+u":
+		// Half page up (vim-like)
+		if m.details.IsFocused() {
+			m.details.ScrollHalfPageUp()
+		}
+
+	case msg.String() == "ctrl+f":
+		// Full page down (vim-like)
+		if m.details.IsFocused() {
+			m.details.ScrollPageDown()
+		}
+
+	case msg.String() == "ctrl+b":
+		// Full page up (vim-like)
+		if m.details.IsFocused() {
+			m.details.ScrollPageUp()
+		}
+
+	case msg.String() == "pgdown":
+		// Page down
+		if m.details.IsFocused() {
+			m.details.ScrollPageDown()
+		}
+
+	case msg.String() == "pgup":
+		// Page up
+		if m.details.IsFocused() {
+			m.details.ScrollPageUp()
+		}
 
 	case matchKey(msg, m.keys.Enter), matchKey(msg, m.keys.Right):
 		return m.handleEnter()
@@ -71,7 +168,12 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 
 	case matchKey(msg, m.keys.Filter):
 		if m.state.View != state.ViewTunnels {
-			m.startFiltering()
+			// Start details search when details is focused, otherwise list filter
+			if m.details.IsFocused() {
+				m.startDetailsSearch()
+			} else {
+				m.startFiltering()
+			}
 		}
 
 	case matchKey(msg, m.keys.Logs):
@@ -164,6 +266,11 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 			m.cloudWatchLogsPanel.Clear()
 			return m.fetchCloudWatchLogs()
 		}
+		// Toggle focus between list and details in split view
+		if m.getLayoutMode() == layoutFull && m.state.View != state.ViewTunnels &&
+			m.state.View != state.ViewDynamoDBQuery {
+			m.details.SetFocused(!m.details.IsFocused())
+		}
 
 	case msg.String() == "shift+tab":
 		// Switch to previous container in CloudWatch logs view
@@ -173,6 +280,33 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 			m.state.CloudWatchLogs = nil
 			m.cloudWatchLogsPanel.Clear()
 			return m.fetchCloudWatchLogs()
+		}
+
+	case matchKey(msg, m.keys.CopyMode):
+		// Enter copy mode in full layout (split view)
+		if m.getLayoutMode() == layoutFull {
+			m.copyMode = true
+			m.copyModeScroll = 0
+			m.logger.Info("Copy mode enabled - select text with mouse, press y or Esc to exit")
+			// Disable mouse capture to allow terminal text selection
+			return tea.DisableMouse
+		}
+
+	case matchKey(msg, m.keys.YankClipboard):
+		// Yank details to system clipboard
+		if m.getLayoutMode() == layoutFull {
+			text := m.details.PlainTextView()
+			if text == "" {
+				m.logger.Warn("No details to copy")
+				return nil
+			}
+			err := clipboard.Init()
+			if err != nil {
+				m.logger.Warn("Clipboard not available - use copy mode (y) instead: " + err.Error())
+				return nil
+			}
+			clipboard.Write(clipboard.FmtText, []byte(text))
+			m.logger.Info("Details copied to clipboard")
 		}
 
 	// Quick resource switching with number keys
@@ -185,11 +319,23 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 	case msg.String() == "3":
 		return m.switchToSQS()
 	case msg.String() == "4":
-		return m.switchToAPIGateway()
-	case msg.String() == "5":
-		return m.switchToStacks()
-	case msg.String() == "6":
 		return m.switchToDynamoDB()
+	case msg.String() == "5":
+		return m.switchToAPIGateway()
+	case msg.String() == "6":
+		return m.switchToStacks()
+
+	case msg.String() == "n":
+		// Next search match in details (when details focused and has search)
+		if m.details.IsFocused() && m.details.MatchCount() > 0 {
+			m.details.NextMatch()
+		}
+
+	case msg.String() == "N":
+		// Previous search match in details (when details focused and has search)
+		if m.details.IsFocused() && m.details.MatchCount() > 0 {
+			m.details.PrevMatch()
+		}
 	}
 
 	return nil
@@ -215,6 +361,32 @@ func (m *Model) handleFilterKey(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	return nil
+}
+
+// handleDetailsSearchKey handles key messages when in details search mode.
+func (m *Model) handleDetailsSearchKey(msg tea.KeyMsg) tea.Cmd {
+	switch {
+	case matchKey(msg, m.keys.FilterAccept):
+		// Accept search and exit search input mode (keep matches highlighted)
+		m.detailsSearching = false
+		m.detailsSearchInput.Blur()
+		return nil
+
+	case matchKey(msg, m.keys.FilterClear):
+		// Clear search and exit
+		m.detailsSearchInput.SetValue("")
+		m.details.ClearSearch()
+		m.detailsSearching = false
+		m.detailsSearchInput.Blur()
+		return nil
+	}
+
+	// Handle text input
+	var cmd tea.Cmd
+	m.detailsSearchInput, cmd = m.detailsSearchInput.Update(msg)
+	// Update search query in details component
+	m.details.SetSearchQuery(m.detailsSearchInput.Value())
+	return cmd
 }
 
 // handleProfileSelectKey handles key messages in profile selection view.
@@ -307,6 +479,8 @@ func (m *Model) handleEnter() tea.Cmd {
 			return m.switchToLambda()
 		case "sqs-queues":
 			return m.switchToSQS()
+		case "dynamodb-tables":
+			return m.switchToDynamoDB()
 		case "api-gateway":
 			return m.switchToAPIGateway()
 		case "cloudformation-stacks":
@@ -1209,6 +1383,16 @@ func (m *Model) handleDynamoDBQueryResultsKey(msg tea.KeyMsg) tea.Cmd {
 		m.dynamodbQueryResults.ScrollJSONUp()
 		return nil
 
+	case "ctrl+d":
+		// Half page down in JSON panel
+		m.dynamodbQueryResults.ScrollJSONHalfPageDown()
+		return nil
+
+	case "ctrl+u":
+		// Half page up in JSON panel
+		m.dynamodbQueryResults.ScrollJSONHalfPageUp()
+		return nil
+
 	case "n":
 		// Load next page if available
 		if m.dynamodbQueryResults.HasMorePages() && !m.state.DynamoDBQueryLoading {
@@ -1235,7 +1419,115 @@ func (m *Model) handleDynamoDBQueryResultsKey(msg tea.KeyMsg) tea.Cmd {
 			return m.executeDynamoDBScan(m.state.DynamoDBScanParams)
 		}
 		return nil
+
+	case "y":
+		// Copy mode - show JSON content for selection
+		m.copyMode = true
+		m.copyModeScroll = 0
+		m.logger.Info("Copy mode enabled - select text with mouse, press y or Esc to exit")
+		// Disable mouse capture to allow terminal text selection
+		return tea.DisableMouse
+
+	case "Y":
+		// Yank current item's JSON to clipboard
+		text := m.dynamodbQueryResults.SelectedJSON()
+		if text == "" {
+			m.logger.Warn("No item selected to copy")
+			return nil
+		}
+		err := clipboard.Init()
+		if err != nil {
+			m.logger.Warn("Clipboard not available - use copy mode (y) instead: " + err.Error())
+			return nil
+		}
+		clipboard.Write(clipboard.FmtText, []byte(text))
+		m.logger.Info("JSON copied to clipboard")
+		return nil
+
+	case ":":
+		// Open command palette
+		m.commandPalette.SetWidth(m.width)
+		return m.commandPalette.Activate()
+
+	case "?":
+		// Show help
+		m.showHelp()
+		return nil
+
+	case "l":
+		// Toggle logs
+		m.state.ToggleLogs()
+		m.updateComponentSizes()
+		return nil
+
+	// Quick resource switching with number keys
+	case "0":
+		return m.switchToMain()
+	case "1":
+		return m.switchToECS()
+	case "2":
+		return m.switchToLambda()
+	case "3":
+		return m.switchToSQS()
+	case "4":
+		return m.switchToDynamoDB()
+	case "5":
+		return m.switchToAPIGateway()
+	case "6":
+		return m.switchToStacks()
 	}
 
 	return nil
+}
+
+// handleMouseWheelUp handles mouse wheel scroll up events.
+func (m *Model) handleMouseWheelUp(x int) {
+	// Determine which pane was scrolled based on X coordinate
+	layout := m.getLayoutMode()
+	if layout != layoutFull {
+		// Single pane - scroll the list
+		m.moveCursorUp()
+		return
+	}
+
+	// Split view - determine which pane based on X position
+	listWidth := int(float64(m.width) * listPaneRatio)
+
+	if x < listWidth {
+		// Left pane (list) - move cursor up
+		m.moveCursorUp()
+	} else {
+		// Right pane (details/JSON) - scroll up
+		if m.state.View == state.ViewDynamoDBQuery {
+			m.dynamodbQueryResults.ScrollJSONUp()
+		} else {
+			m.details.ScrollUp()
+		}
+	}
+}
+
+// handleMouseWheelDown handles mouse wheel scroll down events.
+func (m *Model) handleMouseWheelDown(x int) {
+	// Determine which pane was scrolled based on X coordinate
+	layout := m.getLayoutMode()
+	if layout != layoutFull {
+		// Single pane - scroll the list
+		m.moveCursorDown()
+		return
+	}
+
+	// Split view - determine which pane based on X position
+	listWidth := int(float64(m.width) * listPaneRatio)
+
+	if x < listWidth {
+		// Left pane (list) - move cursor down
+		m.moveCursorDown()
+	} else {
+		// Right pane (details/JSON) - scroll down
+		if m.state.View == state.ViewDynamoDBQuery {
+			m.dynamodbQueryResults.ScrollJSONDown()
+		} else {
+			m.details.ScrollDown()
+		}
+	}
 }

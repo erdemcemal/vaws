@@ -13,6 +13,13 @@ func (m *Model) startFiltering() {
 	m.filterInput.Focus()
 }
 
+// startDetailsSearch enters details search mode.
+func (m *Model) startDetailsSearch() {
+	m.detailsSearching = true
+	m.detailsSearchInput.SetValue(m.details.SearchQuery())
+	m.detailsSearchInput.Focus()
+}
+
 // moveCursorUp moves the cursor up in the current list.
 func (m *Model) moveCursorUp() {
 	switch m.state.View {

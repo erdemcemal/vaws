@@ -66,12 +66,31 @@ func (m *Model) updateQuickBarActions() {
 			{Key: "s", Label: "scan"},
 			{Key: "n", Label: "next page"},
 			{Key: "J/K", Label: "scroll JSON"},
+			{Key: "C-d/u", Label: "half page"},
+			{Key: "y", Label: "copy"},
+			{Key: "Y", Label: "yank"},
 			{Key: "r", Label: "refresh"},
 		}
 	case state.ViewCloudWatchLogs:
 		actions = []components.QuickKey{
 			{Key: "Tab", Label: "switch container"},
 		}
+	}
+
+	// Add focus-specific hints in split view layout
+	if m.getLayoutMode() == layoutFull && m.state.View != state.ViewTunnels &&
+		m.state.View != state.ViewCloudWatchLogs && m.state.View != state.ViewDynamoDBQuery {
+		if m.details.IsFocused() {
+			// Details focused - show scroll hints
+			actions = append(actions, components.QuickKey{Key: "Tab", Label: "list"})
+			actions = append(actions, components.QuickKey{Key: "↑↓", Label: "scroll"})
+			actions = append(actions, components.QuickKey{Key: "C-d/u", Label: "half page"})
+		} else {
+			// List focused - show Tab hint
+			actions = append(actions, components.QuickKey{Key: "Tab", Label: "details"})
+		}
+		actions = append(actions, components.QuickKey{Key: "y", Label: "copy"})
+		actions = append(actions, components.QuickKey{Key: "Y", Label: "yank"})
 	}
 
 	if len(actions) > 0 {
@@ -83,8 +102,10 @@ func (m *Model) updateQuickBarActions() {
 
 // updateMainMenuList updates the main menu list items.
 func (m *Model) updateMainMenuList() {
-	// Show all supported AWS resource types with shortcuts
+	// Show all supported AWS resource types with shortcuts, organized by category
 	items := []components.ListItem{
+		// Compute category
+		{ID: "cat-compute", Title: "── Compute ──", IsHeader: true},
 		{
 			ID:          "ecs-clusters",
 			Title:       "[1] ECS Clusters",
@@ -99,6 +120,8 @@ func (m *Model) updateMainMenuList() {
 			Status:      "λ",
 			StatusStyle: lipgloss.NewStyle().Foreground(theme.Warning),
 		},
+		// Data category
+		{ID: "cat-data", Title: "── Data ──", IsHeader: true},
 		{
 			ID:          "sqs-queues",
 			Title:       "[3] SQS Queues",
@@ -107,28 +130,32 @@ func (m *Model) updateMainMenuList() {
 			StatusStyle: lipgloss.NewStyle().Foreground(theme.Info),
 		},
 		{
+			ID:          "dynamodb-tables",
+			Title:       "[4] DynamoDB Tables",
+			Description: "Browse DynamoDB tables",
+			Status:      "🗃️",
+			StatusStyle: lipgloss.NewStyle().Foreground(theme.Info),
+		},
+		// Infrastructure category
+		{ID: "cat-infra", Title: "── Infrastructure ──", IsHeader: true},
+		{
 			ID:          "api-gateway",
-			Title:       "[4] API Gateway",
+			Title:       "[5] API Gateway",
 			Description: "Browse REST and HTTP APIs",
 			Status:      "🌐",
 			StatusStyle: lipgloss.NewStyle().Foreground(theme.Primary),
 		},
 		{
 			ID:          "cloudformation-stacks",
-			Title:       "[5] CloudFormation Stacks",
+			Title:       "[6] CloudFormation Stacks",
 			Description: "Browse resources organized by stacks",
 			Status:      "📦",
 			StatusStyle: lipgloss.NewStyle().Foreground(theme.TextMuted),
 		},
-		{
-			ID:          "dynamodb-tables",
-			Title:       "[6] DynamoDB Tables",
-			Description: "Browse DynamoDB tables",
-			Status:      "🗃️",
-			StatusStyle: lipgloss.NewStyle().Foreground(theme.Info),
-		},
 	}
 	m.mainMenuList.SetItems(items)
+	// Ensure cursor starts on first selectable item (not a header)
+	m.mainMenuList.Top()
 	m.mainMenuList.SetLoading(false)
 	m.mainMenuList.SetError(nil)
 	m.mainMenuList.SetEmptyMessage("No resources available")

@@ -16,6 +16,7 @@ type ListItem struct {
 	Status      string
 	StatusStyle lipgloss.Style
 	Extra       string
+	IsHeader    bool // Non-selectable category header
 }
 
 // List is a scrollable, selectable list component.
@@ -106,32 +107,58 @@ func (l *List) SelectedItem() *ListItem {
 	return nil
 }
 
-// Up moves the cursor up.
+// Up moves the cursor up, skipping headers.
 func (l *List) Up() {
 	if l.cursor > 0 {
 		l.cursor--
+		l.skipHeadersUp()
 		l.clampOffset()
 	}
 }
 
-// Down moves the cursor down.
+// Down moves the cursor down, skipping headers.
 func (l *List) Down() {
 	if l.cursor < len(l.items)-1 {
 		l.cursor++
+		l.skipHeadersDown()
 		l.clampOffset()
 	}
 }
 
-// Top moves the cursor to the top.
+// Top moves the cursor to the first selectable item.
 func (l *List) Top() {
 	l.cursor = 0
+	l.skipHeadersDown()
 	l.offset = 0
 }
 
-// Bottom moves the cursor to the bottom.
+// Bottom moves the cursor to the last selectable item.
 func (l *List) Bottom() {
 	l.cursor = max(0, len(l.items)-1)
+	l.skipHeadersUp()
 	l.clampOffset()
+}
+
+// skipHeadersDown moves cursor down to skip any headers.
+func (l *List) skipHeadersDown() {
+	for l.cursor < len(l.items) && l.items[l.cursor].IsHeader {
+		l.cursor++
+	}
+	if l.cursor >= len(l.items) {
+		l.cursor = max(0, len(l.items)-1)
+		l.skipHeadersUp()
+	}
+}
+
+// skipHeadersUp moves cursor up to skip any headers.
+func (l *List) skipHeadersUp() {
+	for l.cursor >= 0 && l.cursor < len(l.items) && l.items[l.cursor].IsHeader {
+		l.cursor--
+	}
+	if l.cursor < 0 {
+		l.cursor = 0
+		l.skipHeadersDown()
+	}
 }
 
 func (l *List) clampOffset() {
@@ -208,11 +235,26 @@ func (l *List) View() string {
 	visibleCount := l.visibleItemCount()
 	end := min(l.offset+visibleCount, len(l.items))
 
+	// Header style
+	headerStyle := lipgloss.NewStyle().
+		Foreground(theme.TextMuted).
+		Bold(true)
+
 	for i := l.offset; i < end; i++ {
 		item := l.items[i]
 		isSelected := i == l.cursor
 
 		var line strings.Builder
+
+		// Handle header items (non-selectable category separators)
+		if item.IsHeader {
+			line.WriteString(headerStyle.Render(item.Title))
+			b.WriteString(line.String())
+			if i < end-1 {
+				b.WriteString("\n")
+			}
+			continue
+		}
 
 		// Cursor indicator
 		if isSelected {

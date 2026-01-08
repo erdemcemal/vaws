@@ -136,6 +136,33 @@ func (r *DynamoDBQueryResults) ScrollJSONDown() {
 	r.jsonScroll++
 }
 
+// ScrollJSONHalfPageUp scrolls the JSON panel up by half a page.
+func (r *DynamoDBQueryResults) ScrollJSONHalfPageUp() {
+	halfPage := (r.height - 10) / 2
+	if halfPage < 1 {
+		halfPage = 1
+	}
+	r.jsonScroll = max(0, r.jsonScroll-halfPage)
+}
+
+// ScrollJSONHalfPageDown scrolls the JSON panel down by half a page.
+func (r *DynamoDBQueryResults) ScrollJSONHalfPageDown() {
+	halfPage := (r.height - 10) / 2
+	if halfPage < 1 {
+		halfPage = 1
+	}
+	r.jsonScroll += halfPage
+}
+
+// SelectedJSON returns the JSON representation of the selected item.
+func (r *DynamoDBQueryResults) SelectedJSON() string {
+	item := r.SelectedItem()
+	if item == nil {
+		return ""
+	}
+	return item.JSON
+}
+
 // SelectedItem returns the currently selected item.
 func (r *DynamoDBQueryResults) SelectedItem() *model.DynamoDBItem {
 	if r.cursor >= 0 && r.cursor < len(r.items) {

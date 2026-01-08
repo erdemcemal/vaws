@@ -86,6 +86,10 @@ type Model struct {
 	filterInput textinput.Model
 	filtering   bool
 
+	// Details search input
+	detailsSearchInput textinput.Model
+	detailsSearching   bool
+
 	// Port forward input
 	portInput          textinput.Model
 	enteringPort       bool
@@ -111,6 +115,8 @@ type Model struct {
 	// Status
 	ready      bool
 	showSplash bool
+	copyMode       bool // Copy mode for clean text selection
+	copyModeScroll int  // Scroll offset for copy mode content
 
 	// Profile selection mode (when no profile specified on command line)
 	pendingRegion        string
@@ -135,6 +141,10 @@ func New(client *aws.Client, logger *log.Logger, version string) *Model {
 	payloadInput.Placeholder = "{} or press Enter for empty payload"
 	payloadInput.CharLimit = 10000
 	payloadInput.Width = 60
+
+	detailsSearchInput := textinput.New()
+	detailsSearchInput.Placeholder = "Search..."
+	detailsSearchInput.CharLimit = 64
 
 	// Load configuration
 	cfg, _ := config.Load()
@@ -177,10 +187,11 @@ func New(client *aws.Client, logger *log.Logger, version string) *Model {
 		quickBar:             quickBar,
 		regionSelector:       components.NewRegionSelector(),
 		filterInput:          ti,
-		portInput:           portInput,
-		payloadInput:        payloadInput,
-		keys:                DefaultKeyMap(),
-		showSplash:          true,
+		portInput:            portInput,
+		payloadInput:         payloadInput,
+		detailsSearchInput:   detailsSearchInput,
+		keys:                 DefaultKeyMap(),
+		showSplash:           true,
 	}
 
 	m.state.Profile = client.Profile()
@@ -204,6 +215,10 @@ func NewWithProfileSelection(profiles []string, region string, logger *log.Logge
 	payloadInput.Placeholder = "{} or press Enter for empty payload"
 	payloadInput.CharLimit = 10000
 	payloadInput.Width = 60
+
+	detailsSearchInput := textinput.New()
+	detailsSearchInput.Placeholder = "Search..."
+	detailsSearchInput.CharLimit = 64
 
 	profileSelector := components.NewProfileSelector()
 	profileSelector.SetProfiles(profiles)
@@ -249,10 +264,11 @@ func NewWithProfileSelection(profiles []string, region string, logger *log.Logge
 		container:           components.NewContainer(),
 		quickBar:            quickBar,
 		regionSelector:      components.NewRegionSelector(),
-		filterInput:         ti,
-		portInput:           portInput,
-		payloadInput:        payloadInput,
-		keys:                DefaultKeyMap(),
+		filterInput:          ti,
+		portInput:            portInput,
+		payloadInput:         payloadInput,
+		detailsSearchInput:   detailsSearchInput,
+		keys:                 DefaultKeyMap(),
 		showSplash:          false, // Skip splash, go straight to profile selection
 		pendingRegion:       region,
 	}
@@ -267,12 +283,13 @@ func NewWithProfileSelection(profiles []string, region string, logger *log.Logge
 func (m *Model) Init() tea.Cmd {
 	// If in profile selection mode, don't load anything yet
 	if m.state.View == state.ViewProfileSelect {
-		return nil
+		return tea.EnableMouseCellMotion
 	}
 	// Start at main menu - don't load stacks automatically
 	// User will select what to load from the main menu
 	m.updateMainMenuList()
 	return tea.Batch(
+		tea.EnableMouseCellMotion,    // Enable mouse for scroll wheel
 		m.splash.TickCmd(),           // Start splash animation
 		m.refreshIndicator.TickCmd(), // Start auto-refresh timer
 	)
@@ -283,6 +300,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case tea.MouseMsg:
+		// Handle mouse wheel scrolling
+		if msg.Action == tea.MouseActionPress {
+			switch msg.Button {
+			case tea.MouseButtonWheelUp:
+				m.handleMouseWheelUp(msg.X)
+			case tea.MouseButtonWheelDown:
+				m.handleMouseWheelDown(msg.X)
+			}
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		// Handle profile selection view
 		if m.state.View == state.ViewProfileSelect {

@@ -31,14 +31,7 @@ type QuickBar struct {
 // NewQuickBar creates a new QuickBar component.
 func NewQuickBar() *QuickBar {
 	return &QuickBar{
-		resourceKeys: []QuickKey{
-			{Key: "1", Label: "ECS"},
-			{Key: "2", Label: "Lambda"},
-			{Key: "3", Label: "SQS"},
-			{Key: "4", Label: "API"},
-			{Key: "5", Label: "Stacks"},
-			{Key: "6", Label: "DynamoDB"},
-		},
+		resourceKeys: DefaultResourceKeys(),
 		actionKeys: []QuickKey{
 			{Key: ":", Label: "command"},
 			{Key: "/", Label: "filter"},
@@ -157,6 +150,13 @@ func (q *QuickBar) View() string {
 		return bgStyle.Padding(0, 1).Render(content)
 	}
 
+	if q.mode == "search" {
+		searchPrompt := filterStyle.Render("Search: " + q.filterText + "█")
+		hint := dimLabelStyle.Render("  (Enter to accept, Esc to clear, n/N to navigate)")
+		content := searchPrompt + hint
+		return bgStyle.Padding(0, 1).Render(content)
+	}
+
 	// Normal mode - show resource keys and action keys
 	var parts []string
 
@@ -198,8 +198,8 @@ func DefaultResourceKeys() []QuickKey {
 		{Key: "1", Label: "ECS"},
 		{Key: "2", Label: "Lambda"},
 		{Key: "3", Label: "SQS"},
-		{Key: "4", Label: "API"},
-		{Key: "5", Label: "Stacks"},
-		{Key: "6", Label: "DynamoDB"},
+		{Key: "4", Label: "DynamoDB"},
+		{Key: "5", Label: "API"},
+		{Key: "6", Label: "Stacks"},
 	}
 }

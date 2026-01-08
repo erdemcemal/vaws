@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -59,6 +60,11 @@ func (m *Model) View() string {
 	// Show splash screen
 	if m.showSplash {
 		return m.splash.View()
+	}
+
+	// Show copy mode (renders only details content for clean text selection)
+	if m.copyMode {
+		return m.renderCopyModeView()
 	}
 
 	// Check layout mode
@@ -141,6 +147,9 @@ func (m *Model) View() string {
 	if m.filtering {
 		m.quickBar.SetMode("filter")
 		m.quickBar.SetFilterText(m.filterInput.Value())
+	} else if m.detailsSearching {
+		m.quickBar.SetMode("search")
+		m.quickBar.SetFilterText(m.detailsSearchInput.Value())
 	} else if m.commandPalette.IsActive() {
 		m.quickBar.SetMode("command")
 	} else {
@@ -298,20 +307,39 @@ func (m *Model) renderMainContent(layout layoutMode, contentHeight int) string {
 		return listView
 	}
 
-	// Full two-pane layout
+	// Full two-pane layout with focus indicator
+	// Border color indicates which pane is focused
+	borderColor := theme.Border
+	if m.details.IsFocused() {
+		borderColor = theme.BorderFocus
+	}
+
 	listPane := lipgloss.NewStyle().
 		Width(listWidth).
 		Height(contentHeight).
 		MaxWidth(listWidth).
 		MaxHeight(contentHeight).
+		BorderRight(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(borderColor).
 		Render(listView)
 
+	// Build details content with optional search input
+	detailsContent := m.details.View()
+	if m.detailsSearching {
+		searchStyle := lipgloss.NewStyle().
+			Foreground(theme.Primary).
+			Bold(true)
+		searchLabel := searchStyle.Render("Search: ")
+		detailsContent = searchLabel + m.detailsSearchInput.View() + "\n\n" + detailsContent
+	}
+
 	detailsPane := lipgloss.NewStyle().
-		Width(detailsWidth).
+		Width(detailsWidth - 1). // Account for border
 		Height(contentHeight).
-		MaxWidth(detailsWidth).
+		MaxWidth(detailsWidth - 1).
 		MaxHeight(contentHeight).
-		Render(m.details.View())
+		Render(detailsContent)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, listPane, detailsPane)
 }
@@ -386,4 +414,67 @@ func (m *Model) renderPayloadDialog() string {
 		hintStyle.Render("Enter JSON payload or press Enter for empty")
 
 	return dialogStyle.Render(dialogContent)
+}
+
+// renderCopyModeView renders only the details content for clean text selection.
+func (m *Model) renderCopyModeView() string {
+	headerStyle := lipgloss.NewStyle().
+		Foreground(theme.Primary).
+		Bold(true).
+		Width(m.width).
+		Align(lipgloss.Center)
+
+	hintStyle := lipgloss.NewStyle().
+		Foreground(theme.TextMuted).
+		Italic(true).
+		Width(m.width).
+		Align(lipgloss.Center)
+
+	header := headerStyle.Render("COPY MODE")
+	hint := hintStyle.Render("j/k scroll • Ctrl-d/u half page • g/G top/bottom • y or Esc to exit")
+
+	// Get the appropriate content based on current view
+	var content string
+	if m.state.View == state.ViewDynamoDBQuery {
+		// For DynamoDB query results, show the selected item's JSON
+		content = m.dynamodbQueryResults.SelectedJSON()
+		if content == "" {
+			content = "No item selected"
+		}
+	} else {
+		// For other views, show the details pane content
+		content = m.details.PlainTextView()
+	}
+
+	// Split content into lines and apply scroll offset
+	lines := strings.Split(content, "\n")
+	totalLines := len(lines)
+	visibleLines := m.height - 5 // Account for header, hint, spacing
+
+	// Clamp scroll offset
+	maxScroll := totalLines - visibleLines
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if m.copyModeScroll > maxScroll {
+		m.copyModeScroll = maxScroll
+	}
+
+	// Get visible portion
+	startLine := m.copyModeScroll
+	endLine := startLine + visibleLines
+	if endLine > totalLines {
+		endLine = totalLines
+	}
+
+	visibleContent := strings.Join(lines[startLine:endLine], "\n")
+
+	// Add scroll indicator if content overflows
+	scrollInfo := ""
+	if totalLines > visibleLines {
+		scrollInfo = fmt.Sprintf("\n\n[Line %d-%d of %d]", startLine+1, endLine, totalLines)
+		scrollInfo = lipgloss.NewStyle().Foreground(theme.TextMuted).Render(scrollInfo)
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left, header, hint, "", visibleContent+scrollInfo)
 }

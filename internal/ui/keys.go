@@ -36,6 +36,10 @@ type KeyMap struct {
 	// Filter mode
 	FilterAccept key.Binding
 	FilterClear  key.Binding
+
+	// Copy mode
+	CopyMode      key.Binding
+	YankClipboard key.Binding
 }
 
 // DefaultKeyMap returns the default keybindings.
@@ -140,6 +144,14 @@ func DefaultKeyMap() KeyMap {
 		FilterClear: key.NewBinding(
 			key.WithKeys("esc"),
 			key.WithHelp("esc", "clear"),
+		),
+		CopyMode: key.NewBinding(
+			key.WithKeys("y"),
+			key.WithHelp("y", "copy mode"),
+		),
+		YankClipboard: key.NewBinding(
+			key.WithKeys("Y"),
+			key.WithHelp("Y", "yank to clipboard"),
 		),
 	}
 }
