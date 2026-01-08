@@ -79,13 +79,14 @@ type (
 
 	// jumpHostFoundMsg is sent when a jump host is found for private API Gateway.
 	jumpHostFoundMsg struct {
-		jumpHost       *model.EC2Instance
-		vpcEndpoint    *model.VpcEndpoint
-		vpcEndpointErr error
-		stage          model.APIStage
-		api            interface{}
-		localPort      int
-		err            error
+		jumpHost          *model.EC2Instance
+		vpcEndpoint       *model.VpcEndpoint
+		vpcEndpointErr    error
+		stage             model.APIStage
+		api               interface{}
+		localPort         int
+		err               error
+		vpcsWithEndpoints []string // VPCs that have execute-api endpoints
 	}
 
 	// ec2InstancesLoadedMsg is sent when EC2 instances are loaded for jump host selection.
