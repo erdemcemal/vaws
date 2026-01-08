@@ -50,9 +50,7 @@ func Run(cfg Config) error {
 		model := ui.NewWithProfileSelection(cfg.Profiles, cfg.Region, log.Default(), "v"+Version)
 
 		// Create and run the program
-		opts := []tea.ProgramOption{
-			tea.WithMouseCellMotion(),
-		}
+		opts := []tea.ProgramOption{}
 		if !cfg.NoAltScreen {
 			opts = append(opts, tea.WithAltScreen())
 		}
@@ -75,9 +73,7 @@ func Run(cfg Config) error {
 	model := ui.New(client, log.Default(), "v"+Version)
 
 	// Create and run the program
-	opts := []tea.ProgramOption{
-		tea.WithMouseCellMotion(),
-	}
+	opts := []tea.ProgramOption{}
 	if !cfg.NoAltScreen {
 		opts = append(opts, tea.WithAltScreen())
 	}

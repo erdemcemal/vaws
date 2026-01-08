@@ -703,16 +703,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.logger.Info("Found jump host: %s (%s) in VPC %s", msg.jumpHost.Name, msg.jumpHost.InstanceID, msg.jumpHost.VpcID)
+
+		// Log VPCs that have execute-api endpoints
+		if len(msg.vpcsWithEndpoints) > 0 {
+			m.logger.Info("VPCs with execute-api endpoints: %v", msg.vpcsWithEndpoints)
+		} else {
+			m.logger.Warn("No execute-api VPC endpoints found in this account!")
+		}
+
 		if msg.vpcEndpoint != nil {
 			m.logger.Info("Found VPC endpoint: %s (%s)", msg.vpcEndpoint.VpcEndpointID, msg.vpcEndpoint.ServiceName)
 			if len(msg.vpcEndpoint.DNSEntries) > 0 {
 				m.logger.Info("VPC endpoint DNS: %s", msg.vpcEndpoint.DNSEntries[0])
 			}
 		} else {
-			if msg.vpcEndpointErr != nil {
-				m.logger.Warn("VPC endpoint lookup: %v", msg.vpcEndpointErr)
+			if len(msg.vpcsWithEndpoints) > 0 {
+				m.logger.Error("Jump host VPC (%s) does NOT have execute-api endpoint!", msg.jumpHost.VpcID)
+				m.logger.Error("Execute-api endpoints exist in: %v", msg.vpcsWithEndpoints)
+				m.logger.Error("You need a jump host in one of those VPCs, or configure vpc_endpoint_id in ~/.vaws/config.yaml")
 			} else {
-				m.logger.Warn("No VPC endpoint found for execute-api in VPC %s", msg.jumpHost.VpcID)
+				m.logger.Error("No execute-api VPC endpoint exists in this account!")
+				m.logger.Error("Create one to access private API Gateways, or configure vpc_endpoint_id for cross-account access")
 			}
 		}
 		// Start the private API Gateway tunnel

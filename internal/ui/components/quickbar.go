@@ -83,6 +83,29 @@ func (q *QuickBar) ClearActive() {
 	}
 }
 
+// SetContextActions sets context-specific action keys based on current view.
+// These appear before the standard action keys.
+func (q *QuickBar) SetContextActions(actions []QuickKey) {
+	// Start with context actions, then add standard actions
+	standardActions := []QuickKey{
+		{Key: ":", Label: "command"},
+		{Key: "/", Label: "filter"},
+		{Key: "?", Label: "help"},
+		{Key: "q", Label: "quit"},
+	}
+	q.actionKeys = append(actions, standardActions...)
+}
+
+// ClearContextActions resets to default action keys.
+func (q *QuickBar) ClearContextActions() {
+	q.actionKeys = []QuickKey{
+		{Key: ":", Label: "command"},
+		{Key: "/", Label: "filter"},
+		{Key: "?", Label: "help"},
+		{Key: "q", Label: "quit"},
+	}
+}
+
 // View renders the quick bar.
 func (q *QuickBar) View() string {
 	bgStyle := lipgloss.NewStyle().

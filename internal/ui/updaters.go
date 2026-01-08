@@ -28,6 +28,46 @@ func (m *Model) updateComponentSizes() {
 	m.logs.SetSize(m.width, logsHeight)
 }
 
+// updateQuickBarActions sets context-specific action keys based on current view.
+func (m *Model) updateQuickBarActions() {
+	var actions []components.QuickKey
+
+	switch m.state.View {
+	case state.ViewServices:
+		actions = []components.QuickKey{
+			{Key: "p", Label: "port-forward"},
+			{Key: "l", Label: "logs"},
+		}
+	case state.ViewAPIStages:
+		actions = []components.QuickKey{
+			{Key: "p", Label: "port-forward"},
+		}
+	case state.ViewLambda:
+		actions = []components.QuickKey{
+			{Key: "i", Label: "invoke"},
+			{Key: "l", Label: "logs"},
+		}
+	case state.ViewTunnels:
+		actions = []components.QuickKey{
+			{Key: "p", Label: "new tunnel"},
+			{Key: "s", Label: "stop"},
+			{Key: "r", Label: "restart"},
+		}
+	case state.ViewSQS:
+		// No special actions for SQS list
+	case state.ViewCloudWatchLogs:
+		actions = []components.QuickKey{
+			{Key: "Tab", Label: "switch container"},
+		}
+	}
+
+	if len(actions) > 0 {
+		m.quickBar.SetContextActions(actions)
+	} else {
+		m.quickBar.ClearContextActions()
+	}
+}
+
 // updateMainMenuList updates the main menu list items.
 func (m *Model) updateMainMenuList() {
 	// Show all supported AWS resource types with shortcuts
@@ -290,10 +330,17 @@ func (m *Model) updateEC2List() {
 		if !inst.SSMManaged {
 			statusStyle = lipgloss.NewStyle().Foreground(theme.Warning)
 		}
+
+		// Show VPC ID (truncated) for easier debugging
+		vpcShort := inst.VpcID
+		if len(vpcShort) > 12 {
+			vpcShort = vpcShort[len(vpcShort)-12:] // Show last 12 chars like "vpc-0abc1234"
+		}
+
 		items[i] = components.ListItem{
 			ID:          inst.InstanceID,
 			Title:       inst.Name,
-			Status:      inst.InstanceID,
+			Status:      vpcShort,
 			StatusStyle: statusStyle,
 			Extra:       inst.PrivateIPAddress,
 		}

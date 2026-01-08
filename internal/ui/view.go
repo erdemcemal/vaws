@@ -134,6 +134,10 @@ func (m *Model) View() string {
 
 	// QuickBar (footer with quick keys)
 	m.quickBar.SetWidth(m.width)
+
+	// Set context-specific actions based on current view
+	m.updateQuickBarActions()
+
 	if m.filtering {
 		m.quickBar.SetMode("filter")
 		m.quickBar.SetFilterText(m.filterInput.Value())

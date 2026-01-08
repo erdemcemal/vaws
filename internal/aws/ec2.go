@@ -161,9 +161,16 @@ func (c *Client) ListSSMManagedInstances(ctx context.Context) ([]model.EC2Instan
 	return instances, nil
 }
 
-// FindJumpHost finds a suitable jump host for VPC access using configured settings
-func (c *Client) FindJumpHost(ctx context.Context, vpcID string, jumpHostConfig, jumpHostTagConfig string, defaultTags, defaultNames []string) (*model.EC2Instance, error) {
+// FindJumpHost finds a suitable jump host for VPC access using configured settings.
+// preferredVPCs is an optional list of VPC IDs to prefer (e.g., VPCs with execute-api endpoints).
+func (c *Client) FindJumpHost(ctx context.Context, vpcID string, jumpHostConfig, jumpHostTagConfig string, defaultTags, defaultNames []string, preferredVPCs ...string) (*model.EC2Instance, error) {
 	var triedMethods []string
+
+	// Build a set of preferred VPCs for quick lookup
+	preferredVPCSet := make(map[string]bool)
+	for _, vpc := range preferredVPCs {
+		preferredVPCSet[vpc] = true
+	}
 
 	// Priority 1: Configured jump host by name or ID
 	if jumpHostConfig != "" {
@@ -218,13 +225,25 @@ func (c *Client) FindJumpHost(ctx context.Context, vpcID string, jumpHostConfig,
 		triedMethods = append(triedMethods, fmt.Sprintf("name '%s': %v", name, err))
 	}
 
-	// Priority 5: Get any SSM-managed instance (in the VPC if specified)
+	// Priority 5: Get any SSM-managed instance
+	// Prefer instances in VPCs with execute-api endpoints (preferredVPCs)
 	ssmInstances, err := c.ListSSMManagedInstances(ctx)
 	if err != nil {
 		triedMethods = append(triedMethods, fmt.Sprintf("SSM instances: %v", err))
 	} else if len(ssmInstances) == 0 {
 		triedMethods = append(triedMethods, "SSM instances: none found online")
 	} else {
+		// First, try to find an instance in a preferred VPC
+		if len(preferredVPCSet) > 0 {
+			for _, inst := range ssmInstances {
+				if preferredVPCSet[inst.VpcID] {
+					return &inst, nil
+				}
+			}
+			triedMethods = append(triedMethods, fmt.Sprintf("SSM instances: found %d but none in preferred VPCs", len(ssmInstances)))
+		}
+
+		// Then, try VPC filter if specified
 		if vpcID != "" {
 			for _, inst := range ssmInstances {
 				if inst.VpcID == vpcID {

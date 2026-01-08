@@ -282,9 +282,16 @@ func (m *APIGatewayManager) StartPrivateTunnel(ctx context.Context, api interfac
 		log.Info("Using discovered VPC endpoint DNS: %s", remoteHost)
 	} else if isPrivateAPI {
 		// Private API without VPC endpoint - provide helpful error
-		return nil, fmt.Errorf("private API Gateway has no VPC endpoint configured.\n" +
-			"The API should have vpcEndpointIds in its endpoint configuration.\n" +
-			"Check the API Gateway settings or add vpc_endpoint_id to ~/.vaws/config.yaml")
+		vpcInfo := ""
+		if jumpHost != nil && jumpHost.VpcID != "" {
+			vpcInfo = fmt.Sprintf(" (searched in VPC: %s)", jumpHost.VpcID)
+		}
+		return nil, fmt.Errorf("no execute-api VPC endpoint found for private API Gateway%s.\n\n"+
+			"To access a private API Gateway, you need a VPC endpoint for execute-api.\n"+
+			"Options:\n"+
+			"  1. Create an execute-api VPC endpoint in the jump host's VPC\n"+
+			"  2. Add 'vpc_endpoint_id: vpce-xxx' to ~/.vaws/config.yaml for this profile\n"+
+			"  3. Ensure the jump host is in the same VPC as your execute-api endpoint", vpcInfo)
 	} else {
 		// Regional/Edge API - use standard DNS (jump host should be able to reach public internet)
 		remoteHost = fmt.Sprintf("%s.execute-api.%s.amazonaws.com", apiID, m.region)

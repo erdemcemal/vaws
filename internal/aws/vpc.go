@@ -59,6 +59,27 @@ func (c *Client) FindAPIGatewayVpcEndpoint(ctx context.Context, vpcID string) (*
 	return nil, fmt.Errorf("no execute-api VPC endpoint found in VPC %s", vpcID)
 }
 
+// ListAPIGatewayVpcEndpoints lists all execute-api VPC endpoints in the account.
+// Returns a map of VPC ID -> VPC endpoint for quick lookup.
+func (c *Client) ListAPIGatewayVpcEndpoints(ctx context.Context) (map[string]*model.VpcEndpoint, error) {
+	// List all VPC endpoints (no VPC filter)
+	endpoints, err := c.ListVpcEndpoints(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter for execute-api endpoints and build map
+	result := make(map[string]*model.VpcEndpoint)
+	for _, ep := range endpoints {
+		if strings.Contains(ep.ServiceName, "execute-api") && ep.State == "available" {
+			epCopy := ep // Copy to avoid pointer issues
+			result[ep.VpcID] = &epCopy
+		}
+	}
+
+	return result, nil
+}
+
 // GetVpcEndpointByID gets a specific VPC endpoint by ID
 func (c *Client) GetVpcEndpointByID(ctx context.Context, endpointID string) (*model.VpcEndpoint, error) {
 	out, err := c.ec2.DescribeVpcEndpoints(ctx, &ec2.DescribeVpcEndpointsInput{
