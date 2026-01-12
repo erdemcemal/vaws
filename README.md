@@ -1,54 +1,19 @@
 # vaws
 
-A keyboard-driven terminal UI for exploring and managing AWS resources. Navigate CloudFormation stacks, ECS services, Lambda functions, and API Gateways with vim-style keybindings.
+**The AWS Console in your terminal.** Navigate CloudFormation, ECS, Lambda, API Gateway, SQS, and DynamoDB with vim-style keybindings.
 
-![Go Version](https://img.shields.io/badge/go-%3E%3D1.21-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
+[![Release](https://img.shields.io/github/v/release/erdemcemal/vaws?style=flat-square)](https://github.com/erdemcemal/vaws/releases)
+[![Go](https://img.shields.io/badge/go-%3E%3D1.21-00ADD8?style=flat-square&logo=go)](https://go.dev/)
+[![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 
-![vaws Screenshot](assets/screenshot.png)
+![vaws demo](assets/demo.gif)
 
-## Features
+## Why vaws?
 
-- **CloudFormation Stacks** - Browse stacks with status, outputs, and parameters
-- **ECS Services** - View services, tasks, and deployments with health indicators
-- **Lambda Functions** - List functions filtered by stack with runtime details
-- **API Gateway** - Explore REST and HTTP APIs with stages and routes
-- **Port Forwarding** - Tunnel to ECS containers and private API Gateways via SSM
-- **Multi-account** - Switch between AWS profiles and regions on the fly
-
-## Prerequisites
-
-### Required Tools
-
-| Tool | Purpose | Installation |
-|------|---------|--------------|
-| AWS CLI v2 | AWS authentication | [Install Guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) |
-| Session Manager Plugin | Port forwarding via SSM | `brew install --cask session-manager-plugin` |
-
-### AWS Configuration
-
-```bash
-# Configure credentials (choose one)
-aws configure                          # Access keys
-aws configure sso                      # SSO (recommended)
-
-# Login if using SSO
-aws sso login --profile your-profile
-```
-
-### IAM Permissions
-
-Your IAM role needs these permissions:
-
-```
-cloudformation:DescribeStacks, cloudformation:ListStackResources
-ecs:ListClusters, ecs:ListServices, ecs:DescribeServices, ecs:ListTasks, ecs:DescribeTasks
-lambda:ListFunctions, lambda:GetFunction
-apigateway:GET
-apigatewayv2:GetApis, apigatewayv2:GetStages, apigatewayv2:GetRoutes
-ec2:DescribeInstances, ec2:DescribeVpcEndpoints
-ssm:StartSession, ssm:DescribeInstanceInformation
-```
+- **20 clicks → 2 keystrokes** - Jump from CloudFormation stack to running ECS task logs instantly
+- **Port forward without the AWS CLI dance** - Tunnel to ECS containers and private API Gateways in seconds
+- **Multi-account workflow** - Switch profiles and regions on the fly without restarting
+- **Keyboard-first** - If you love vim, k9s, or lazygit, you'll feel right at home
 
 ## Installation
 
@@ -58,24 +23,74 @@ ssm:StartSession, ssm:DescribeInstanceInformation
 brew install erdemcemal/tap/vaws
 ```
 
-### From Source
-
-```bash
-git clone https://github.com/erdemcemal/vaws.git
-cd vaws
-make install
-```
-
 ### Binary Download
 
 Download from [GitHub Releases](https://github.com/erdemcemal/vaws/releases).
 
-## Usage
+### From Source
 
 ```bash
-vaws                                    # Default profile and region
-vaws --profile prod --region us-west-2  # Specific profile/region
-vaws --debug                            # Enable debug logging
+git clone https://github.com/erdemcemal/vaws.git
+cd vaws && make install
+```
+
+> **Note:** Requires AWS CLI v2 configured (`aws configure` or `aws sso login`). For port forwarding, install the [Session Manager Plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html).
+
+## Quick Start
+
+```bash
+# Launch with default profile
+vaws
+
+# Use a specific profile and region
+vaws --profile production --region eu-west-1
+
+# Test AWS connectivity
+vaws --test
+```
+
+Press `:` to open the command palette or check the shortcuts below.
+
+## Features
+
+| Service | What You Can Do |
+|---------|-----------------|
+| **CloudFormation** | Browse stacks, outputs, parameters, and resources |
+| **ECS** | View services, tasks, deployments, and stream CloudWatch logs |
+| **Lambda** | List functions, view details, invoke with custom payloads |
+| **API Gateway** | Explore REST/HTTP APIs, stages, and routes |
+| **SQS** | Browse queues with DLQ visibility and message counts |
+| **DynamoDB** | Query and scan tables with paginated results |
+| **Port Forwarding** | Tunnel to ECS containers and private API Gateways via SSM |
+
+## Real-World Workflows
+
+### Debug a Failing ECS Service
+
+```
+1. Launch vaws
+2. Press 2 to view ECS services
+3. Navigate to your service with j/k
+4. Press l to stream CloudWatch logs
+5. Press p to port forward and test locally
+```
+
+### Access a Private API Gateway
+
+```
+1. Press 4 to view API Gateways
+2. Select your private API → Stage
+3. Press p, pick a jump host
+4. curl http://localhost:8080/your-endpoint
+```
+
+### Browse DynamoDB Tables
+
+```
+1. Press 6 to view DynamoDB tables
+2. Select a table, press Enter
+3. Press q to query or s to scan
+4. Navigate results with j/k, paginate with n/p
 ```
 
 ## Keyboard Shortcuts
@@ -101,6 +116,7 @@ vaws --debug                            # Enable debug logging
 | `3` | Lambda Functions |
 | `4` | API Gateway |
 | `5` | Active Tunnels |
+| `6` | DynamoDB Tables |
 | `:` | Command palette |
 
 ### Actions
@@ -115,164 +131,46 @@ vaws --debug                            # Enable debug logging
 | `c` | Clear terminated |
 | `q` | Quit |
 
-## Port Forwarding
+## Configuration (Optional)
 
-### ECS Services (Fargate/EC2)
-
-Forward traffic to containers running in ECS tasks.
-
-**Requirements:**
-- ECS task with `enableExecuteCommand: true`
-- Task role with SSM permissions
-
-**Steps:**
-1. Navigate: **Stack → Services → Select service**
-2. Press `p`, enter local port (or Enter for random)
-3. Access at `http://localhost:<port>`
-
-### Private API Gateway (Lambda Backend)
-
-Access private API Gateways that invoke Lambda functions within a VPC. This is how you reach Lambda functions that aren't publicly accessible.
-
-**Requirements:**
-- Private API Gateway with VPC endpoint
-- EC2 instance in the same VPC (jump host) with SSM agent
-- Jump host's security group must allow outbound HTTPS (443)
-
-**Architecture:**
-```
-localhost → SSM Tunnel → EC2 Jump Host → VPC Endpoint → API Gateway → Lambda
-```
-
-**Steps:**
-1. Navigate: **API Gateway → Select private API → Stages → Select stage**
-2. Press `p`, enter local port
-3. Select a jump host from the list (SSM-managed EC2 instances)
-4. Access at `http://localhost:<port>/your-endpoint`
-
-**How it works:**
-- Creates an SSM tunnel through the jump host to the API Gateway VPC endpoint
-- Runs a local HTTP proxy that handles TLS termination
-- Automatically prepends the stage name to your requests
-- No need to modify `/etc/hosts` or use `curl --resolve`
-
-**Example:**
-```bash
-# Your request
-curl http://localhost:8080/users/123
-
-# Gets forwarded as
-https://<api-id>-<vpce-id>.execute-api.<region>.amazonaws.com/prod/users/123
-```
-
-## Configuration
-
-### Optional Config File
-
-Create `~/.vaws/config.yaml` for custom settings:
+Create `~/.vaws/config.yaml` for advanced setups:
 
 ```yaml
 profiles:
   production:
-    jump_host: bastion-prod      # Preferred jump host name or instance ID
+    jump_host: bastion-prod   # Preferred SSM jump host
     region: us-east-1
-  staging:
-    jump_host: bastion-staging
-    vpc_endpoint_id: vpce-xxx    # For cross-account API Gateway access
 
 defaults:
-  jump_host_tags:                # Auto-discovery by tags
+  jump_host_tags:
     - "vaws:jump-host=true"
-    - "Name=bastion"
-  jump_host_names:               # Auto-discovery by name
-    - "bastion"
-    - "jumphost"
 ```
 
-### Data Storage
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for detailed configuration options and common issues.
 
-| File | Purpose |
-|------|---------|
-| `~/.vaws/config.yaml` | User configuration |
-| `~/.vaws/tunnels.json` | Persistent tunnel state |
+## Roadmap
 
-## Troubleshooting
+- [ ] Lambda invocation with payload editor
+- [ ] SQS message send/peek/redrive
+- [ ] Secrets Manager browser
+- [ ] Global search across all resources
+- [ ] CloudWatch alarms dashboard
 
-### ECS Port Forwarding: "TargetNotConnected"
-
-```
-TargetNotConnected: ecs:ecs-service-name_xxx is not connected
-```
-
-**Cause:** The ECS task doesn't have SSM connectivity.
-
-**Solutions:**
-
-1. **Enable Execute Command on the service:**
-   ```bash
-   aws ecs update-service --cluster <cluster> --service <service> --enable-execute-command
-   ```
-
-2. **Add SSM permissions to task role:**
-   ```json
-   {
-     "Effect": "Allow",
-     "Action": [
-       "ssmmessages:CreateControlChannel",
-       "ssmmessages:CreateDataChannel",
-       "ssmmessages:OpenControlChannel",
-       "ssmmessages:OpenDataChannel"
-     ],
-     "Resource": "*"
-   }
-   ```
-
-3. **For private subnets, add VPC endpoints:**
-   - `com.amazonaws.<region>.ssmmessages`
-   - `com.amazonaws.<region>.ssm`
-
-4. **Redeploy tasks** after enabling (existing tasks won't have SSM agent):
-   ```bash
-   aws ecs update-service --cluster <cluster> --service <service> --force-new-deployment
-   ```
-
-### Private API Gateway: "No VPC endpoint configured"
-
-**Cause:** The API Gateway doesn't have a VPC endpoint ID in its configuration.
-
-**Solutions:**
-
-1. Check that the API Gateway is configured with `endpointConfiguration.vpcEndpointIds`
-2. Or add `vpc_endpoint_id` to `~/.vaws/config.yaml` for cross-account access
-
-### Jump Host: "No suitable jump host found"
-
-**Cause:** No SSM-managed EC2 instances found.
-
-**Solutions:**
-
-1. Ensure EC2 instance has SSM agent running and is online
-2. Check instance IAM role has `AmazonSSMManagedInstanceCore` policy
-3. Configure a specific jump host in `~/.vaws/config.yaml`:
-   ```yaml
-   profiles:
-     your-profile:
-       jump_host: your-instance-name
-   ```
-
-## Development
-
-```bash
-make build      # Build binary
-make test       # Run tests
-make lint       # Run linter
-make fmt        # Format code
-```
+See [ROADMAP.md](ROADMAP.md) for the full plan.
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
+
+**Found a bug?** [Open an issue](https://github.com/erdemcemal/vaws/issues)
 
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
+
+---
+
+<p align="center">
+  <sub>Built for engineers who'd rather type than click.</sub><br>
+  <sub>If vaws saves you time, consider giving it a <a href="https://github.com/erdemcemal/vaws">star</a></sub>
+</p>

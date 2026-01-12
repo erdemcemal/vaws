@@ -799,10 +799,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cloudWatchLogsPanel.SetStreaming(true)
 		m.cloudWatchLogsPanel.Clear()
 
-		// Start fetching logs
+		// Start fetching logs and spinner animation
 		return m, tea.Batch(
 			m.fetchCloudWatchLogs(),
 			m.cloudWatchLogsPanel.TickCmd(),
+			m.cloudWatchLogsPanel.SpinnerTickCmd(),
 		)
 
 	case cloudWatchLogsLoadedMsg:
@@ -819,6 +820,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.state.CloudWatchLogs = append(m.state.CloudWatchLogs, msg.entries...)
 			m.cloudWatchLogsPanel.AppendEntries(msg.entries)
+		}
+
+	case components.CloudWatchSpinnerTickMsg:
+		// Advance spinner animation and continue if streaming
+		if m.state.View == state.ViewCloudWatchLogs && m.state.CloudWatchLogsStreaming {
+			m.cloudWatchLogsPanel.AdvanceSpinner()
+			return m, m.cloudWatchLogsPanel.SpinnerTickCmd()
 		}
 
 	case components.CloudWatchLogsTickMsg:

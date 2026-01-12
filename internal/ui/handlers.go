@@ -7,7 +7,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"golang.design/x/clipboard"
 
 	"vaws/internal/aws"
 	"vaws/internal/model"
@@ -300,12 +299,10 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 				m.logger.Warn("No details to copy")
 				return nil
 			}
-			err := clipboard.Init()
-			if err != nil {
-				m.logger.Warn("Clipboard not available - use copy mode (y) instead: " + err.Error())
+			if err := copyToClipboard(text); err != nil {
+				m.logger.Warn("Clipboard not available: " + err.Error())
 				return nil
 			}
-			clipboard.Write(clipboard.FmtText, []byte(text))
 			m.logger.Info("Details copied to clipboard")
 		}
 
@@ -879,10 +876,11 @@ func (m *Model) handleLambdaCloudWatchLogs() tea.Cmd {
 	m.cloudWatchLogsPanel.SetStreaming(true)
 	m.cloudWatchLogsPanel.Clear()
 
-	// Start fetching logs
+	// Start fetching logs and spinner animation
 	return tea.Batch(
 		m.fetchLambdaCloudWatchLogs(logGroup),
 		m.cloudWatchLogsPanel.TickCmd(),
+		m.cloudWatchLogsPanel.SpinnerTickCmd(),
 	)
 }
 
@@ -1435,12 +1433,10 @@ func (m *Model) handleDynamoDBQueryResultsKey(msg tea.KeyMsg) tea.Cmd {
 			m.logger.Warn("No item selected to copy")
 			return nil
 		}
-		err := clipboard.Init()
-		if err != nil {
-			m.logger.Warn("Clipboard not available - use copy mode (y) instead: " + err.Error())
+		if err := copyToClipboard(text); err != nil {
+			m.logger.Warn("Clipboard not available: " + err.Error())
 			return nil
 		}
-		clipboard.Write(clipboard.FmtText, []byte(text))
 		m.logger.Info("JSON copied to clipboard")
 		return nil
 

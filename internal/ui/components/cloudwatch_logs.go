@@ -14,26 +14,31 @@ import (
 )
 
 const (
-	maxCloudWatchEntries   = 1000
-	cloudWatchPollInterval = 5 * time.Second
+	maxCloudWatchEntries       = 1000
+	cloudWatchPollInterval     = 5 * time.Second
+	cloudWatchSpinnerInterval  = 100 * time.Millisecond
 )
 
 // CloudWatchLogsTickMsg signals time to fetch new logs.
 type CloudWatchLogsTickMsg time.Time
 
+// CloudWatchSpinnerTickMsg signals time to update spinner animation.
+type CloudWatchSpinnerTickMsg time.Time
+
 // CloudWatchLogsPanel displays CloudWatch log entries with container tabs.
 type CloudWatchLogsPanel struct {
-	mu          sync.RWMutex
-	entries     []model.CloudWatchLogEntry
-	containers  []model.ContainerLogConfig
-	selectedTab int
-	width       int
-	height      int
-	scroll      int
-	autoScroll  bool
-	streaming   bool
-	serviceName string
-	taskID      string
+	mu           sync.RWMutex
+	entries      []model.CloudWatchLogEntry
+	containers   []model.ContainerLogConfig
+	selectedTab  int
+	width        int
+	height       int
+	scroll       int
+	autoScroll   bool
+	streaming    bool
+	spinnerFrame int
+	serviceName  string
+	taskID       string
 }
 
 // NewCloudWatchLogsPanel creates a new CloudWatch logs panel.
@@ -145,6 +150,13 @@ func (p *CloudWatchLogsPanel) IsStreaming() bool {
 	return p.streaming
 }
 
+// AdvanceSpinner advances the spinner animation frame.
+func (p *CloudWatchLogsPanel) AdvanceSpinner() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.spinnerFrame = (p.spinnerFrame + 1) % len(spinnerFrames)
+}
+
 // ScrollUp scrolls log view up.
 func (p *CloudWatchLogsPanel) ScrollUp() {
 	p.mu.Lock()
@@ -229,6 +241,13 @@ func (p *CloudWatchLogsPanel) TickCmd() tea.Cmd {
 	})
 }
 
+// SpinnerTickCmd returns command for spinner animation interval.
+func (p *CloudWatchLogsPanel) SpinnerTickCmd() tea.Cmd {
+	return tea.Tick(cloudWatchSpinnerInterval, func(t time.Time) tea.Msg {
+		return CloudWatchSpinnerTickMsg(t)
+	})
+}
+
 // View renders the CloudWatch logs panel.
 func (p *CloudWatchLogsPanel) View() string {
 	p.mu.RLock()
@@ -252,7 +271,8 @@ func (p *CloudWatchLogsPanel) View() string {
 
 	if p.streaming {
 		streamingStyle := lipgloss.NewStyle().Foreground(theme.Success)
-		title += streamingStyle.Render(" STREAMING")
+		spinnerChar := spinnerFrames[p.spinnerFrame]
+		title += streamingStyle.Render(fmt.Sprintf(" %s STREAMING", spinnerChar))
 	}
 
 	b.WriteString(titleStyle.Render(title))
@@ -313,18 +333,30 @@ func (p *CloudWatchLogsPanel) View() string {
 		for i := start; i < end; i++ {
 			entry := filteredEntries[i]
 			timeStr := entry.Timestamp.Format("15:04:05.000")
+			message := strings.TrimSpace(entry.Message)
 
-			line := fmt.Sprintf("%s %s",
-				timeStyle.Render(timeStr),
-				strings.TrimSpace(entry.Message),
-			)
+			// Calculate available width for message (after timestamp)
+			timestampWidth := lipgloss.Width(timeStr) + 1 // +1 for space
+			availableWidth := p.width - 6 - timestampWidth // -6 for padding
 
-			// Truncate if too long
-			if lipgloss.Width(line) > p.width-4 {
-				line = line[:p.width-7] + "..."
+			if availableWidth < 20 {
+				availableWidth = 20
 			}
 
+			// Wrap long messages
+			wrappedLines := wrapText(message, availableWidth)
+
+			// First line includes timestamp
+			line := fmt.Sprintf("%s %s", timeStyle.Render(timeStr), wrappedLines[0])
 			b.WriteString(line)
+
+			// Continuation lines are indented to align with message
+			indent := strings.Repeat(" ", timestampWidth)
+			for j := 1; j < len(wrappedLines); j++ {
+				b.WriteString("\n")
+				b.WriteString(indent + wrappedLines[j])
+			}
+
 			if i < end-1 {
 				b.WriteString("\n")
 			}
@@ -385,4 +417,41 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// wrapText wraps text to fit within maxWidth characters.
+func wrapText(text string, maxWidth int) []string {
+	if maxWidth <= 0 {
+		maxWidth = 80
+	}
+
+	if len(text) <= maxWidth {
+		return []string{text}
+	}
+
+	var lines []string
+	for len(text) > 0 {
+		if len(text) <= maxWidth {
+			lines = append(lines, text)
+			break
+		}
+
+		// Find a good break point (prefer space)
+		breakPoint := maxWidth
+		for i := maxWidth; i > maxWidth/2; i-- {
+			if text[i] == ' ' {
+				breakPoint = i
+				break
+			}
+		}
+
+		lines = append(lines, text[:breakPoint])
+		text = strings.TrimLeft(text[breakPoint:], " ")
+	}
+
+	if len(lines) == 0 {
+		return []string{text}
+	}
+
+	return lines
 }
